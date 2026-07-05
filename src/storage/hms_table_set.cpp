@@ -31,11 +31,9 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, HMSAPICol
 void HMSTableSet::LoadEntries(ClientContext &context) {
 	auto &transaction = HMSTransaction::Get(context, catalog);
 
-	auto &hms_catalog = catalog.Cast<HMSCatalog>();
-
 	// TODO: handle out-of-order columns using position property
 
-	auto tables = HMSAPI::GetTablesInSchema(context, schema.name, hms_catalog.endpoint);
+	auto tables = HMSAPI::GetTablesInSchema(transaction.GetConnection(), schema.name);
 
 	for (auto &table : tables) {
 		// Validate that the table's database matches our schema name
@@ -101,12 +99,11 @@ optional_ptr<CatalogEntry> HMSTableSet::RefreshTable(ClientContext &context, con
 
 unique_ptr<HMSTableInfo> HMSTableSet::GetTableInfo(ClientContext &context, HMSSchemaEntry &schema,
                                                    const string &table_name) {
-	auto &hms_catalog = catalog.Cast<HMSCatalog>();
-	auto client = HMSAPI::GetClient(hms_catalog.endpoint);
+	auto &client = HMSTransaction::Get(context, catalog).GetConnection();
 
 	Apache::Hadoop::Hive::Table ht;
 	try {
-		ht = client->GetTable(schema.name, table_name);
+		ht = client.GetTable(schema.name, table_name);
 	} catch (const std::exception &ex) {
 		throw IOException("Failed to fetch table info for '%s.%s': %s", schema.name.c_str(), table_name.c_str(),
 		                  ex.what());
@@ -239,8 +236,8 @@ optional_ptr<CatalogEntry> HMSTableSet::CreateTable(ClientContext &context, Boun
 	// Build Thrift Table
 	auto thrift_table = HMSUtils::BuildThriftTable(context, schema, info, format, hms_catalog.warehouse_location);
 
-	// Call HMS API to create
-	HMSAPI::CreateTable(context, thrift_table, hms_catalog.endpoint);
+	// Call HMS API to create over the transaction's shared connection
+	HMSAPI::CreateTable(HMSTransaction::Get(context, catalog).GetConnection(), thrift_table);
 
 	// Fetch table info first to ensure we have complete data before creating entry
 	// This avoids creating an incomplete entry if GetTableInfo fails
@@ -263,8 +260,8 @@ optional_ptr<CatalogEntry> HMSTableSet::CreateTable(ClientContext &context, Boun
 }
 
 void HMSTableSet::DropEntry(ClientContext &context, DropInfo &info) {
-	auto &hms_catalog = catalog.Cast<HMSCatalog>();
-	bool dropped = HMSAPI::DropTable(context, schema.name, info.name, hms_catalog.endpoint);
+	auto &client = HMSTransaction::Get(context, catalog).GetConnection();
+	bool dropped = HMSAPI::DropTable(client, schema.name, info.name);
 	if (!dropped) {
 		// Table did not exist in HMS. Without IF EXISTS, surface the error. With IF EXISTS,
 		// fall through so any stale local cache entry (e.g. dropped by another process after

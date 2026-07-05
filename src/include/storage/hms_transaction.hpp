@@ -12,6 +12,7 @@
 
 namespace duckdb {
 class HMSCatalog;
+class HMSClient;
 class HMSSchemaEntry;
 class HMSTableEntry;
 
@@ -26,15 +27,20 @@ public:
 	void Commit();
 	void Rollback();
 
-	//	UCConnection &GetConnection();
-	//	unique_ptr<UCResult> Query(const string &query);
+	// Lazily open — and thereafter reuse — a single metastore connection for the
+	// lifetime of this transaction. All catalog operations in the transaction
+	// share it, so a query that touches many schemas/tables no longer opens (and,
+	// once Kerberos is enabled, re-authenticates) a fresh connection per call.
+	HMSClient &GetConnection();
+
 	static HMSTransaction &Get(ClientContext &context, Catalog &catalog);
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
 
 private:
-	//	UCConnection connection;
+	HMSCatalog &hms_catalog;
+	unique_ptr<HMSClient> connection;
 	HMSTransactionState transaction_state;
 	AccessMode access_mode;
 };

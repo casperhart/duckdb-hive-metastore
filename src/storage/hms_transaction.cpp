@@ -1,5 +1,6 @@
 #include "storage/hms_transaction.hpp"
 #include "storage/hms_catalog.hpp"
+#include "hms_api.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -7,11 +8,17 @@
 namespace duckdb {
 
 HMSTransaction::HMSTransaction(HMSCatalog &hms_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), access_mode(hms_catalog.access_mode) {
-	//	connection = UCConnection::Open(hms_catalog.path);
+    : Transaction(manager, context), hms_catalog(hms_catalog), access_mode(hms_catalog.access_mode) {
 }
 
 HMSTransaction::~HMSTransaction() = default;
+
+HMSClient &HMSTransaction::GetConnection() {
+	if (!connection) {
+		connection = HMSAPI::GetClient(hms_catalog.endpoint);
+	}
+	return *connection;
+}
 
 void HMSTransaction::Start() {
 	transaction_state = HMSTransactionState::TRANSACTION_NOT_YET_STARTED;

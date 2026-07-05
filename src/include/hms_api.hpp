@@ -32,17 +32,22 @@ struct HMSAPITable {
 
 class HMSAPI {
 public:
-	static vector<HMSAPISchema> GetSchemas(ClientContext &ctx, const string &endpoint);
-	static vector<HMSAPITable> GetTablesInSchema(ClientContext &ctx, const string &schema, const string &endpoint);
+	// The operations below run against a caller-owned, already-open client so a
+	// single connection can be reused across a whole transaction (see
+	// HMSTransaction::GetConnection) instead of dialing the metastore per call.
+	static vector<HMSAPISchema> GetSchemas(HMSClient &client);
+	static vector<HMSAPITable> GetTablesInSchema(HMSClient &client, const string &schema);
 
 	// Create a table in HMS
-	static void CreateTable(ClientContext &ctx, const Apache::Hadoop::Hive::Table &table, const string &endpoint);
+	static void CreateTable(HMSClient &client, const Apache::Hadoop::Hive::Table &table);
 
 	// Drop a table from HMS (metadata only; storage files are not removed).
 	// Returns true if dropped, false if the table did not exist. Other failures throw.
-	static bool DropTable(ClientContext &ctx, const string &db_name, const string &table_name, const string &endpoint);
+	static bool DropTable(HMSClient &client, const string &db_name, const string &table_name);
 
-	// Helper to get or create a client based on endpoint
+	// Open a new metastore client for the given endpoint. This is the single
+	// place a connection is established; callers should prefer reusing one via
+	// HMSTransaction::GetConnection rather than calling this per operation.
 	static unique_ptr<HMSClient> GetClient(const string &endpoint);
 };
 

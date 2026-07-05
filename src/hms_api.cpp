@@ -31,9 +31,8 @@ unique_ptr<HMSClient> HMSAPI::GetClient(const string &endpoint) {
 	return client;
 }
 
-vector<HMSAPISchema> HMSAPI::GetSchemas(ClientContext &ctx, const string &endpoint) {
-	auto client = GetClient(endpoint);
-	auto db_names = client->GetAllDatabases();
+vector<HMSAPISchema> HMSAPI::GetSchemas(HMSClient &client) {
+	auto db_names = client.GetAllDatabases();
 
 	vector<HMSAPISchema> schemas;
 	for (const auto &name : db_names) {
@@ -47,13 +46,12 @@ vector<HMSAPISchema> HMSAPI::GetSchemas(ClientContext &ctx, const string &endpoi
 	return schemas;
 }
 
-vector<HMSAPITable> HMSAPI::GetTablesInSchema(ClientContext &ctx, const string &schema, const string &endpoint) {
-	auto client = GetClient(endpoint);
-	auto table_names = client->GetAllTables(schema);
+vector<HMSAPITable> HMSAPI::GetTablesInSchema(HMSClient &client, const string &schema) {
+	auto table_names = client.GetAllTables(schema);
 
 	// Fetch details for all tables (potentially in batches if GetTableObjects supports it)
 	// The current HMSClient::GetTableObjects implementation takes a list of names.
-	auto hive_tables = client->GetTableObjects(schema, table_names);
+	auto hive_tables = client.GetTableObjects(schema, table_names);
 
 	vector<HMSAPITable> result;
 	for (const auto &ht : hive_tables) {
@@ -109,16 +107,14 @@ vector<HMSAPITable> HMSAPI::GetTablesInSchema(ClientContext &ctx, const string &
 	return result;
 }
 
-void HMSAPI::CreateTable(ClientContext &ctx, const Apache::Hadoop::Hive::Table &table, const string &endpoint) {
-	auto client = GetClient(endpoint);
-	client->CreateTable(table);
+void HMSAPI::CreateTable(HMSClient &client, const Apache::Hadoop::Hive::Table &table) {
+	client.CreateTable(table);
 }
 
-bool HMSAPI::DropTable(ClientContext &ctx, const string &db_name, const string &table_name, const string &endpoint) {
-	auto client = GetClient(endpoint);
+bool HMSAPI::DropTable(HMSClient &client, const string &db_name, const string &table_name) {
 	// delete_data=false: HMS extension manages the catalog only, not the underlying
 	// storage. The user controls file lifecycle via their object store.
-	return client->DropTable(db_name, table_name, /*delete_data=*/false);
+	return client.DropTable(db_name, table_name, /*delete_data=*/false);
 }
 
 } // namespace duckdb
