@@ -17,6 +17,13 @@ build_loadable_extension(${TARGET_NAME} " " ${ALL_OBJECT_FILES})
 target_link_libraries(${EXTENSION_NAME} thrift::thrift)
 target_link_libraries(${LOADABLE_EXTENSION_NAME} thrift::thrift)
 
+# Link Kerberos/GSSAPI libraries when detected in src/CMakeLists.txt. Empty and
+# harmless on builds without Kerberos support.
+if(HMS_KERBEROS_LIBS)
+  target_link_libraries(${EXTENSION_NAME} ${HMS_KERBEROS_LIBS})
+  target_link_libraries(${LOADABLE_EXTENSION_NAME} ${HMS_KERBEROS_LIBS})
+endif()
+
 install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"

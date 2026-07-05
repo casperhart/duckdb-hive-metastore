@@ -1,12 +1,28 @@
 #include "hms_client.hpp"
+#include "hms_kerberos.hpp"
 #include "duckdb/common/exception.hpp"
 #include <cstdio>
 
 namespace duckdb {
 
-HMSClient::HMSClient(const string &host, int port) : host(host), port(port), connected(false) {
+// TCP connect timeout for the metastore socket. Applies to both the plaintext
+// and SASL paths; keeps a dead endpoint from stalling the first catalog access.
+static constexpr int CONNECT_TIMEOUT_MS = 10000;
+
+HMSClient::HMSClient(const string &host, int port, const HMSClientAuth &auth)
+    : host(host), port(port), connected(false) {
 	socket = std::make_shared<apache::thrift::transport::TSocket>(host, port);
-	transport = std::make_shared<apache::thrift::transport::TBufferedTransport>(socket);
+	// Bound the TCP connect so an unreachable/wrong metastore fails fast with a
+	// clear error instead of hanging the query that first touches the catalog.
+	socket->setConnTimeout(CONNECT_TIMEOUT_MS);
+	if (auth.kerberos) {
+		// SASL/GSSAPI: the SASL transport does its own length-framing, so the
+		// binary protocol sits directly on top of it (no TBufferedTransport).
+		transport = HMSMakeKerberosTransport(socket, auth.service, auth.fqdn.empty() ? host : auth.fqdn);
+	} else {
+		// Historic plaintext path — unchanged.
+		transport = std::make_shared<apache::thrift::transport::TBufferedTransport>(socket);
+	}
 	protocol = std::make_shared<apache::thrift::protocol::TBinaryProtocol>(transport);
 	client = unique_ptr<Apache::Hadoop::Hive::ThriftHiveMetastoreClient>(
 	    new Apache::Hadoop::Hive::ThriftHiveMetastoreClient(protocol));

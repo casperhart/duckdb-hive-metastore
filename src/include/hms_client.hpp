@@ -15,9 +15,20 @@
 
 namespace duckdb {
 
+// How to authenticate the metastore Thrift connection. Defaults to the historic
+// behaviour: plaintext, no SASL. Kerberos is opt-in and only enabled when the
+// ambient hive-site.xml declares hive.metastore.sasl.enabled=true.
+struct HMSClientAuth {
+	bool kerberos = false;
+	// Kerberos service primary (the part before '/' in the metastore principal).
+	string service = "hive";
+	// Server FQDN used to build the "service/fqdn@REALM" SPN. Empty => use host.
+	string fqdn;
+};
+
 class HMSClient {
 public:
-	HMSClient(const string &host, int port);
+	explicit HMSClient(const string &host, int port, const HMSClientAuth &auth = HMSClientAuth());
 	~HMSClient();
 
 	void Open();

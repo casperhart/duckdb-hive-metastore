@@ -155,6 +155,46 @@ ATTACH 'thrift://<host>:<port>' AS <catalog_name> (<options>);
 ATTACH 'thrift://localhost:9083' AS my_hms (TYPE hive_metastore);
 ```
 
+### Kerberos authentication (SASL/GSSAPI)
+
+For metastores secured with Kerberos (`hive.metastore.sasl.enabled=true`), the
+extension can authenticate over Thrift using the GSSAPI (Kerberos v5) mechanism.
+This is picked up **automatically from the ambient environment** — no DuckDB
+secrets or extra ATTACH options are required:
+
+- **Ticket & realm config** come from the standard Kerberos locations: the
+  credential cache (`kinit` / `KRB5CCNAME`) and `krb5.conf` (`KRB5_CONFIG`). Make
+  sure you have a valid ticket (`klist`) before attaching.
+- **The metastore URI and Kerberos settings** are read from `hive-site.xml`,
+  located via `HIVE_CONF_DIR`, `HADOOP_CONF_DIR`, `HIVE_HOME/conf`,
+  `HADOOP_HOME/etc/hadoop`, or `/etc/hive/conf`. The service principal is taken
+  from `hive.metastore.kerberos.principal` (e.g. `hive/_HOST@REALM`), with the
+  server host substituted for `_HOST`.
+
+Because the URI can be discovered from config, you may attach without a path:
+
+```sql
+-- Endpoint + Kerberos settings resolved from hive-site.xml on HADOOP_CONF_DIR
+ATTACH '' AS my_hms (TYPE hive_metastore);
+
+-- Or pass the endpoint explicitly; Kerberos is still auto-detected from config
+ATTACH 'thrift://secure-hms:9083' AS my_hms (TYPE hive_metastore);
+```
+
+Notes and current limitations:
+
+- Kerberos is enabled **only** when `hive.metastore.sasl.enabled=true` is found in
+  `hive-site.xml`. On non-kerberized clusters the connection is plaintext exactly
+  as before — nothing changes.
+- Only `QOP=auth` (authentication, no integrity/encryption wrapping) is
+  supported. If the metastore mandates `auth-int`/`auth-conf`
+  (`hive.metastore.thrift.sasl.qop`), the handshake will fail with a clear error.
+- Requires a build with GSSAPI support (see [Building](#building)). The target
+  machine must have `libgssapi_krb5` available at runtime.
+- SPN/hostname matching is the usual failure point: the metastore's principal
+  must resolve to `hive/<fqdn>@REALM` for the host you connect to. Connect using
+  the FQDN, and ensure DNS/`krb5.conf` canonicalization agree with the SPN.
+
 ### Querying Tables
 
 Once attached, query HMS tables like regular DuckDB tables:
@@ -314,7 +354,28 @@ git clone https://github.com/Microsoft/vcpkg.git
 export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
 ````
 
-However, it uses only the `thrift` package from VCPKG. You can also install it (`libthrift-dev` and `thrift-compiler` plus different dependencies of DuckDB itself) manually and skip VCPKG entirely if you prefer that.
+It uses the `thrift`, `curl`, and `krb5` packages from VCPKG (see `vcpkg.json`).
+You can also install these (`libthrift-dev`, `thrift-compiler`, `libkrb5-dev`,
+plus different dependencies of DuckDB itself) manually and skip VCPKG entirely if
+you prefer that.
+
+#### Kerberos/GSSAPI dependency
+
+Kerberos authentication (see [above](#kerberos-authentication-saslgssapi)) is
+always compiled in. GSSAPI (MIT krb5) is provided by the `krb5` VCPKG port, so it
+is **vendored into the extension binary** — the target machine does not need a
+system Kerberos library installed, and there are no machine-specific build paths.
+The build discovers it through the `krb5-gssapi.pc` that VCPKG installs (via
+pkg-config), with a plain `find_library` fallback.
+
+Runtime configuration is still ambient: MIT krb5 reads `/etc/krb5.conf` (or
+`KRB5_CONFIG`) and the credential cache (`kinit` / `KRB5CCNAME`) at runtime
+regardless of how it was linked, so the vendored library uses the host's
+Kerberos configuration and ticket.
+
+Building thrift's compiler under VCPKG needs flex/bison (the CI installs these
+via `extra_toolchains: "parser_tools"`); on macOS install a modern bison with
+`brew install bison` if the system one (2.3) is too old.
 
 ### Build steps
 

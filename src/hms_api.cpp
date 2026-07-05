@@ -1,11 +1,31 @@
 #include "hms_api.hpp"
+#include "hms_config.hpp"
+#include "hms_kerberos.hpp"
 
 namespace duckdb {
 
 unique_ptr<HMSClient> HMSAPI::GetClient(const string &endpoint) {
+	// Pick up ambient Hadoop/Hive configuration (hive-site.xml) if present. When
+	// no config is found this is a no-op and the behaviour below is identical to
+	// the original: parse the ATTACH endpoint, connect in plaintext.
+	HMSSiteConfig site = HMSLoadSiteConfig();
+
+	// Resolve the endpoint: use the one given on ATTACH, or fall back to
+	// hive.metastore.uris from the discovered config when none was supplied.
+	string resolved = endpoint;
+	if (resolved.empty()) {
+		if (!site.found || site.metastore_uris.empty()) {
+			throw InvalidInputException(
+			    "No Hive Metastore endpoint was provided and none could be discovered from hive-site.xml. Pass a "
+			    "'thrift://host:port' path to ATTACH, or set HADOOP_CONF_DIR/HIVE_CONF_DIR so hive.metastore.uris can "
+			    "be found.");
+		}
+		resolved = site.metastore_uris[0];
+	}
+
 	// Parse host and port from endpoint
 	// Expected format: "thrift://hostname:port" or "hostname:port"
-	string parsed_endpoint = endpoint;
+	string parsed_endpoint = resolved;
 	string prefix = "thrift://";
 	if (StringUtil::StartsWith(parsed_endpoint, prefix)) {
 		parsed_endpoint = parsed_endpoint.substr(prefix.length());
@@ -13,7 +33,7 @@ unique_ptr<HMSClient> HMSAPI::GetClient(const string &endpoint) {
 
 	auto parts = StringUtil::Split(parsed_endpoint, ":");
 	if (parts.size() != 2) {
-		throw InvalidInputException("Invalid HMS endpoint format. Expected 'hostname:port', got: %s", endpoint);
+		throw InvalidInputException("Invalid HMS endpoint format. Expected 'hostname:port', got: %s", resolved);
 	}
 
 	string host = parts[0];
@@ -26,7 +46,16 @@ unique_ptr<HMSClient> HMSAPI::GetClient(const string &endpoint) {
 		throw InvalidInputException("Port number out of range in HMS endpoint: %s", parts[1]);
 	}
 
-	auto client = make_uniq<HMSClient>(host, port);
+	// Enable Kerberos/SASL only when the ambient config explicitly requests it,
+	// so non-kerberized clusters are entirely unaffected.
+	HMSClientAuth auth;
+	if (site.found && site.sasl_enabled) {
+		auth.kerberos = true;
+		auth.service = HMSKerberosServiceFromPrincipal(site.kerberos_principal);
+		auth.fqdn = host;
+	}
+
+	auto client = make_uniq<HMSClient>(host, port, auth);
 	client->Open();
 	return client;
 }
