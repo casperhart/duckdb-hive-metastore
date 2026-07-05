@@ -12,7 +12,38 @@ DEFAULT_TEST_EXTENSION_DEPS=parquet;httpfs
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
 # Hive Metastore integration test targets
-.PHONY: test-all test-env-start test-env-stop test-run test-mutate-oss test-schema-drift spark-verify-writes test-spark-verify test-cross-engine-scenarios test-cross-engine-scenarios-run
+.PHONY: test-all test-env-start test-env-stop test-run test-mutate-oss test-schema-drift spark-verify-writes test-spark-verify test-cross-engine-scenarios test-cross-engine-scenarios-run test-kerberos
+
+# Kerberos config for the kerberized-metastore test. Uses an MIT kinit (the
+# extension links MIT krb5, so use a matching client). Override KRB_KINIT if
+# your MIT kinit lives elsewhere.
+KRB_COMPOSE=docker-compose.kerberos.yml
+KRB_SECRETS=$(PROJ_DIR)test/kerberos/secrets
+KRB_KINIT?=$(shell command -v /opt/homebrew/opt/krb5/bin/kinit 2>/dev/null || command -v krb5-kinit 2>/dev/null || command -v kinit)
+
+# Bring up a KDC + kerberized metastore, obtain a ticket, and run the
+# kerberos-gated tests against a real GSSAPI handshake. Tears the stack down
+# afterwards (even on failure).
+test-kerberos: release
+	@echo "========================================"
+	@echo "Kerberized Hive Metastore Test (SASL/GSSAPI)"
+	@echo "========================================"
+	cd test && docker compose -f $(KRB_COMPOSE) down -v --remove-orphans 2>/dev/null || true
+	@echo "[1/4] Building + starting KDC and kerberized metastore..."
+	cd test && docker compose -f $(KRB_COMPOSE) up -d --build --wait
+	@echo "[2/4] Obtaining a Kerberos ticket (client@EXAMPLE.COM) via $(KRB_KINIT)..."
+	KRB5_CONFIG=$(KRB_SECRETS)/krb5.conf KRB5CCNAME=FILE:$(KRB_SECRETS)/ccache \
+	  $(KRB_KINIT) -kt $(KRB_SECRETS)/client.keytab client@EXAMPLE.COM
+	@echo "[3/4] Running kerberos tests..."
+	HMS_KERBEROS_TEST=1 \
+	  HADOOP_CONF_DIR=$(PROJ_DIR)test/kerberos/client-conf \
+	  KRB5_CONFIG=$(KRB_SECRETS)/krb5.conf \
+	  KRB5CCNAME=FILE:$(KRB_SECRETS)/ccache \
+	  ./build/release/test/unittest 'test/sql/kerberos/*' ; \
+	  status=$$? ; \
+	  echo "[4/4] Tearing down..." ; \
+	  cd test && docker compose -f $(KRB_COMPOSE) down -v ; \
+	  exit $$status
 
 # Main target: build, start env, run tests, stop env
 test-all: release

@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<configuration>
+    <!-- Metadata DB -->
+    <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:postgresql://hive-metastore-postgresql:5432/metastore</value>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>org.postgresql.Driver</value>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionUserName</name>
+        <value>hive</value>
+    </property>
+    <property>
+        <name>javax.jdo.option.ConnectionPassword</name>
+        <value>hive</value>
+    </property>
+    <!-- Let the metastore create its own schema so we don't need a separate,
+         kerberos-aware schematool step. -->
+    <property>
+        <name>datanucleus.schema.autoCreateAll</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>hive.metastore.schema.verification</name>
+        <value>false</value>
+    </property>
+    <property>
+        <name>hive.metastore.warehouse.dir</name>
+        <value>file:///tmp/warehouse</value>
+    </property>
+
+    <!-- Kerberos: require SASL/GSSAPI on the Thrift interface and log the
+         service in from its keytab. The instance is a literal "localhost" so a
+         host client dialing thrift://localhost:9083 targets the same SPN. -->
+    <property>
+        <name>hive.metastore.sasl.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>hive.metastore.kerberos.principal</name>
+        <value>hive/localhost@EXAMPLE.COM</value>
+    </property>
+    <property>
+        <name>hive.metastore.kerberos.keytab.file</name>
+        <value>/keytabs/hive.keytab</value>
+    </property>
+    <property>
+        <name>hadoop.security.authentication</name>
+        <value>kerberos</value>
+    </property>
+    <property>
+        <name>hadoop.security.authorization</name>
+        <value>true</value>
+    </property>
+</configuration>

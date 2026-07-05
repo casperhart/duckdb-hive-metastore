@@ -1,0 +1,40 @@
+# name: test/sql/kerberos/kerberos_attach.test
+# description: Authenticate to a Kerberized Hive Metastore over SASL/GSSAPI
+# group: [kerberos]
+#
+# Gated on HMS_KERBEROS_TEST so the normal suite skips it. Driven by
+# `make test-kerberos`, which brings up the KDC + kerberized metastore, kinit's
+# a ticket, and points HADOOP_CONF_DIR at test/kerberos/client-conf. Enumerating
+# schemas forces a metastore connection, so a passing query means the GSSAPI
+# handshake succeeded.
+
+require hive_metastore
+
+require-env HMS_KERBEROS_TEST
+
+# Empty path exercises endpoint auto-discovery from hive-site.xml; Kerberos is
+# enabled because that config sets hive.metastore.sasl.enabled=true.
+statement ok
+ATTACH '' AS khms (TYPE hive_metastore);
+
+# Reading the catalog's schemas opens the (Kerberos-authenticated) connection.
+query I
+SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'khms';
+----
+true
+
+# 'default' always exists in a fresh metastore.
+query I
+SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'khms' AND schema_name = 'default';
+----
+1
+
+# Explicit endpoint should authenticate the same way (trailing dot keeps the
+# SPN host as "localhost" regardless of the client's DNS search domain).
+statement ok
+ATTACH 'thrift://localhost.:9083' AS khms2 (TYPE hive_metastore);
+
+query I
+SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'khms2';
+----
+true

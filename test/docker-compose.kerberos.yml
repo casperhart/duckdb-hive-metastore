@@ -1,0 +1,67 @@
+# Kerberized Hive Metastore stack for `make test-kerberos`.
+# Self-contained (its own KDC + Postgres + SASL-enabled metastore); it does NOT
+# extend docker-compose.yml. No MinIO/Spark — this validates the GSSAPI login,
+# not data access.
+services:
+  hive-metastore-postgresql:
+    image: postgres:18
+    container_name: hive-metastore-postgresql
+    environment:
+      - POSTGRES_DB=metastore
+      - POSTGRES_USER=hive
+      - POSTGRES_PASSWORD=hive
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MIT Kerberos KDC. Publishes on high host ports so the host test runner can
+  # reach it without privileged binding.
+  kdc:
+    build:
+      context: ./kerberos
+      dockerfile: Dockerfile.kdc
+    container_name: kdc
+    hostname: kdc
+    ports:
+      - "8088:88/udp"
+      - "8088:88/tcp"
+      - "8749:749/tcp"
+    volumes:
+      - ./kerberos/secrets:/krb-secrets
+    healthcheck:
+      # Ready once the keytabs the metastore/host depend on have been written.
+      test: ["CMD-SHELL", "test -f /krb-secrets/hive.keytab && test -f /krb-secrets/client.keytab"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  hive-metastore:
+    image: ilum/hive:3.1.3
+    container_name: hive-metastore
+    hostname: hive-metastore
+    ports:
+      - "9083:9083"
+    volumes:
+      - ./kerberos/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+      - ./kerberos/core-site.xml:/opt/hive/conf/core-site.xml:ro
+      - ./kerberos/krb5.container.conf:/etc/krb5.conf:ro
+      - ./kerberos/secrets:/keytabs:ro
+    depends_on:
+      hive-metastore-postgresql:
+        condition: service_healthy
+      kdc:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "Starting kerberized Hive Metastore (SASL/GSSAPI)..."
+        exec hive --service metastore
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/9083' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s

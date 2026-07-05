@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!--
+  Client-side hive-site.xml consumed by the extension via HADOOP_CONF_DIR.
+  Drives the extension's auto-discovery: it reads the URI here and, because
+  sasl is enabled, authenticates with Kerberos using the ambient ticket. The
+  service principal ("hive/<host>@REALM") is built from the primary below plus
+  the endpoint host ("localhost"), yielding hive/localhost@EXAMPLE.COM.
+-->
+<configuration>
+    <!-- Trailing dot on the host keeps krb5 from appending the resolver's
+         search domain (e.g. a router's ".internal"), so the SPN host stays
+         "localhost" and matches the metastore principal hive/localhost. -->
+    <property>
+        <name>hive.metastore.uris</name>
+        <value>thrift://localhost.:9083</value>
+    </property>
+    <property>
+        <name>hive.metastore.sasl.enabled</name>
+        <value>true</value>
+    </property>
+    <property>
+        <name>hive.metastore.kerberos.principal</name>
+        <value>hive/localhost@EXAMPLE.COM</value>
+    </property>
+</configuration>
