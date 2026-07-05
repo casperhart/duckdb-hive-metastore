@@ -32,9 +32,10 @@ struct HMSAPITable {
 
 class HMSAPI {
 public:
-	// The operations below run against a caller-owned, already-open client so a
-	// single connection can be reused across a whole transaction (see
-	// HMSTransaction::GetConnection) instead of dialing the metastore per call.
+	// The operations below run against a caller-owned, already-open client,
+	// typically obtained via HMSConnection::Execute (see HMSCatalog::GetConnection)
+	// so one connection is reused with failover/reconnect instead of dialing the
+	// metastore per call.
 	static vector<HMSAPISchema> GetSchemas(HMSClient &client);
 	static vector<HMSAPITable> GetTablesInSchema(HMSClient &client, const string &schema);
 
@@ -45,10 +46,10 @@ public:
 	// Returns true if dropped, false if the table did not exist. Other failures throw.
 	static bool DropTable(HMSClient &client, const string &db_name, const string &table_name);
 
-	// Open a new metastore client for the given endpoint. This is the single
-	// place a connection is established; callers should prefer reusing one via
-	// HMSTransaction::GetConnection rather than calling this per operation.
-	static unique_ptr<HMSClient> GetClient(const string &endpoint);
+	// Open a metastore client for a single "thrift://host:port" endpoint with the
+	// given auth. Low-level: HMSConnection owns endpoint/URI selection, failover,
+	// and reconnect — callers should go through HMSCatalog::GetConnection().
+	static unique_ptr<HMSClient> CreateClient(const string &endpoint, const HMSClientAuth &auth);
 };
 
 } // namespace duckdb

@@ -1,0 +1,29 @@
+# name: test/sql/basic/failover.test
+# description: HA failover across multiple Hive Metastore URIs
+# group: [basic]
+
+require hive_metastore
+
+require-env HMS_TEST_AVAILABLE
+
+# The connection manager tries every comma-separated endpoint (random start,
+# then round-robin). A dead first endpoint must transparently fail over to the
+# live one — connection-refused is immediate, so this stays fast.
+statement ok
+ATTACH 'thrift://localhost:19083,thrift://localhost:9083' AS hms_ha (TYPE hive_metastore);
+
+# Reaching the catalog proves a live endpoint was selected despite the dead one.
+query I
+SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'hms_ha';
+----
+true
+
+# A list of only-dead endpoints: ATTACH is lazy, so it succeeds, but the first
+# catalog access fails with a clear, aggregated error naming the tried URIs.
+statement ok
+ATTACH 'thrift://localhost:19083,thrift://localhost:19084' AS hms_dead (TYPE hive_metastore);
+
+statement error
+SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'hms_dead';
+----
+Failed to connect to any Hive Metastore endpoint

@@ -14,6 +14,7 @@
 #include "storage/hms_schema_set.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "hms_client.hpp"
+#include "hms_connection.hpp"
 
 namespace duckdb {
 class HMSSchemaEntry;
@@ -75,12 +76,19 @@ public:
 
 	void ClearCache();
 
+	// The catalog-scoped metastore connection (failover + reconnect), shared by
+	// all transactions/threads that touch this attached catalog.
+	HMSConnection &GetConnection() {
+		return connection;
+	}
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 
 private:
 	HMSSchemaSet schemas;
 	string default_schema;
+	HMSConnection connection;
 };
 
 } // namespace duckdb

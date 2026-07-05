@@ -13,7 +13,19 @@
 // Generated Thrift headers
 #include "ThriftHiveMetastore.h"
 
+#include <stdexcept>
+
 namespace duckdb {
+
+// Raised by HMSClient when the underlying Thrift transport fails (dead socket,
+// EOF, connect reset) — as distinct from a logical metastore error such as
+// NoSuchObject or MetaException. HMSConnection catches this to transparently
+// reconnect (failing over across URIs) and retry the operation once.
+class HMSTransportError : public std::runtime_error {
+public:
+	explicit HMSTransportError(const string &msg) : std::runtime_error(msg) {
+	}
+};
 
 // How to authenticate the metastore Thrift connection. Defaults to the historic
 // behaviour: plaintext, no SASL. Kerberos is opt-in and only enabled when the

@@ -20,9 +20,9 @@ static bool IsInternalTable(const string &catalog, const string &schema) {
 void HMSSchemaSet::LoadEntries(ClientContext &context) {
 	auto &hms_catalog = catalog.Cast<HMSCatalog>();
 
-	// Use HMS API to fetch schemas over the transaction's shared connection
-	auto &transaction = HMSTransaction::Get(context, catalog);
-	auto schemas = HMSAPI::GetSchemas(transaction.GetConnection());
+	// Fetch schemas over the catalog's shared connection (failover + reconnect).
+	auto schemas =
+	    hms_catalog.GetConnection().Execute([](HMSClient &client) { return HMSAPI::GetSchemas(client); });
 
 	for (const auto &schema : schemas) {
 		CreateSchemaInfo info;

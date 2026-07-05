@@ -8,6 +8,8 @@
 #include "storage/hms_transaction_manager.hpp"
 #include "hive_metastore_extension.hpp"
 
+#include <thrift/Thrift.h>
+
 namespace duckdb {
 
 static unique_ptr<Catalog> HMSCatalogAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
@@ -52,6 +54,11 @@ public:
 };
 
 static void LoadInternal(ExtensionLoader &loader) {
+	// Thrift logs transport errors (e.g. connection-refused while failing over
+	// across metastore URIs) to stderr by default. Our exceptions already carry
+	// that detail, so silence the duplicate, alarming-looking noise.
+	apache::thrift::GlobalOutput.setOutputFunction([](const char *) {});
+
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	StorageExtension::Register(config, "hive_metastore", make_uniq<HiveMetastoreStorageExtension>());
 	StorageExtension::Register(config, "hms_catalog", make_uniq<HiveMetastoreStorageExtension>());

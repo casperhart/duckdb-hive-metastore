@@ -8,7 +8,7 @@ add_library(
   hms_ext_library OBJECT
   hive_metastore_extension.cpp hms_utils.cpp hms_format_detector.cpp
   hms_path_utils.cpp hms_client.cpp hms_api.cpp hms_config.cpp
-  hms_kerberos.cpp)
+  hms_kerberos.cpp hms_connection.cpp)
 # Link to hms_thrift_lib to get Thrift includes and library
 target_link_libraries(hms_ext_library PRIVATE hms_thrift_lib)
 

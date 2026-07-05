@@ -1,6 +1,7 @@
 #include "hms_client.hpp"
 #include "hms_kerberos.hpp"
 #include "duckdb/common/exception.hpp"
+#include <thrift/transport/TTransportException.h>
 #include <cstdio>
 
 namespace duckdb {
@@ -66,6 +67,9 @@ vector<string> HMSClient::GetAllDatabases() {
 	vector<string> dbs;
 	try {
 		client->get_all_databases(dbs);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to get all databases: %s", tx.what());
 	}
@@ -78,6 +82,9 @@ vector<string> HMSClient::GetAllTables(const string &db_name) {
 	vector<string> tables;
 	try {
 		client->get_all_tables(tables, db_name);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to get all tables for database '%s': %s", db_name, tx.what());
 	}
@@ -92,6 +99,9 @@ Apache::Hadoop::Hive::Database HMSClient::GetDatabase(const string &db_name) {
 		client->get_database(db, db_name);
 	} catch (Apache::Hadoop::Hive::NoSuchObjectException &e) {
 		throw IOException("Database '%s' not found: %s", db_name, e.message);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to get database '%s': %s", db_name, tx.what());
 	}
@@ -106,6 +116,9 @@ Apache::Hadoop::Hive::Table HMSClient::GetTable(const string &db_name, const str
 		client->get_table(table, db_name, table_name);
 	} catch (Apache::Hadoop::Hive::NoSuchObjectException &e) {
 		throw IOException("Table '%s.%s' not found: %s", db_name, table_name, e.message);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to get table '%s.%s': %s", db_name, table_name, tx.what());
 	}
@@ -119,6 +132,9 @@ vector<Apache::Hadoop::Hive::Table> HMSClient::GetTableObjects(const string &db_
 	vector<Apache::Hadoop::Hive::Table> tables;
 	try {
 		client->get_table_objects_by_name(tables, db_name, table_names);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to get table objects for database '%s': %s", db_name, tx.what());
 	}
@@ -137,6 +153,9 @@ void HMSClient::CreateTable(const Apache::Hadoop::Hive::Table &table) {
 #endif
 	} catch (Apache::Hadoop::Hive::AlreadyExistsException &e) {
 		throw IOException("Table '%s.%s' already exists: %s", table.dbName, table.tableName, e.message);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to create table '%s.%s': %s", table.dbName, table.tableName, tx.what());
 	}
@@ -152,6 +171,9 @@ bool HMSClient::DropTable(const string &db_name, const string &table_name, bool 
 		// Distinct return value lets the caller honor IF EXISTS without swallowing
 		// transport or auth errors that look the same from a generic catch.
 		return false;
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to drop table '%s.%s': %s", db_name, table_name, tx.what());
 	}
