@@ -27,7 +27,10 @@ struct HMSSiteConfig {
 	bool sasl_enabled = false;
 	// hive.metastore.kerberos.principal, e.g. "hive/_HOST@REALM".
 	string kerberos_principal;
-	// Absolute path of the file we loaded, for diagnostics.
+	// hadoop.security.authentication (from hive-site.xml or core-site.xml). When
+	// "kerberos" it forces SASL on, alongside hive.metastore.sasl.enabled.
+	string hadoop_auth;
+	// Absolute path of the hive-site.xml we loaded, for diagnostics.
 	string source_path;
 };
 

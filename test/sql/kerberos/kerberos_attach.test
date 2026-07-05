@@ -12,6 +12,14 @@ require hive_metastore
 
 require-env HMS_KERBEROS_TEST
 
+# The extension auto-attached the metastore as 'hive_metastore' on load (because
+# HADOOP_CONF_DIR points at a kerberized config). Reaching its schemas proves
+# the auto-attached catalog authenticated over GSSAPI too.
+query I
+SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'hive_metastore';
+----
+true
+
 # Empty path exercises endpoint auto-discovery from hive-site.xml; Kerberos is
 # enabled because that config sets hive.metastore.sasl.enabled=true.
 statement ok

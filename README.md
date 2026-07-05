@@ -155,6 +155,45 @@ ATTACH 'thrift://<host>:<port>' AS <catalog_name> (<options>);
 ATTACH 'thrift://localhost:9083' AS my_hms (TYPE hive_metastore);
 ```
 
+### Automatic discovery & attachment
+
+The extension reads the ambient Hadoop/Hive configuration — `hive-site.xml` and
+`core-site.xml`, located via `HIVE_CONF_DIR`, `HADOOP_CONF_DIR`, `HIVE_HOME/conf`,
+`HADOOP_HOME/etc/hadoop`, or `/etc/hive/conf`. When it's present:
+
+- **Auto-attach on load.** If a metastore URI is discovered, the extension
+  attaches it automatically as `hive_metastore` when it is `LOAD`ed — no `ATTACH`
+  needed. When nothing is discovered, behaviour is identical to before (attach
+  manually).
+
+  ```sql
+  LOAD hive_metastore;              -- with HADOOP_CONF_DIR set:
+  SHOW ALL TABLES;                  -- the 'hive_metastore' catalog is already there
+  ```
+
+  | Env var | Default | Effect |
+  | --- | --- | --- |
+  | `HMS_AUTOATTACH` | on | Set to `0`/`false`/`off`/`no` to disable auto-attach |
+  | `HMS_AUTOATTACH_NAME` | `hive_metastore` | Catalog name to auto-attach under |
+
+- **Endpoint discovery.** `ATTACH '' (TYPE hive_metastore)` (empty path) resolves
+  the endpoint(s) from `hive.metastore.uris` instead of requiring an explicit
+  `thrift://host:port`.
+
+### High availability (multiple metastores)
+
+`hive.metastore.uris` (or a comma-separated `ATTACH` path) may list several
+metastores. The connection is **catalog-scoped** and reused across queries; it
+**fails over** across every URI (random start, then round-robin, matching Hive's
+client), and **transparently reconnects** — re-selecting a URI and
+re-authenticating from the ambient Kerberos ticket — if a connection drops. If
+every URI is unreachable, a single error names each one tried.
+
+```sql
+-- Explicit HA list; the first (dead) endpoint is skipped, the second is used.
+ATTACH 'thrift://hms-a:9083,thrift://hms-b:9083' AS my_hms (TYPE hive_metastore);
+```
+
 ### Kerberos authentication (SASL/GSSAPI)
 
 For metastores secured with Kerberos (`hive.metastore.sasl.enabled=true`), the

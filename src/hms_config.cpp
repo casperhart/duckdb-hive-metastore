@@ -159,14 +159,18 @@ HMSSiteConfig HMSParseSiteConfig(const string &xml_in) {
 			cfg.sasl_enabled = ParseBool(value);
 		} else if (name == "hive.metastore.kerberos.principal") {
 			cfg.kerberos_principal = value;
+		} else if (name == "hadoop.security.authentication") {
+			cfg.hadoop_auth = StringUtil::Lower(value);
 		}
 	}
 	return cfg;
 }
 
-HMSSiteConfig HMSLoadSiteConfig() {
-	// Candidate directories, most specific first — mirrors how the Hadoop/Hive
-	// clients resolve their configuration.
+namespace {
+
+// Candidate config directories, most specific first — mirrors how the
+// Hadoop/Hive clients resolve their configuration.
+vector<string> CandidateConfigDirs() {
 	vector<string> dirs;
 	string env;
 	if (GetEnv("HIVE_CONF_DIR", env)) {
@@ -184,19 +188,50 @@ HMSSiteConfig HMSLoadSiteConfig() {
 	// Common package-install locations as a last resort.
 	dirs.push_back("/etc/hive/conf");
 	dirs.push_back("/etc/hadoop/conf");
+	return dirs;
+}
 
+// Read the first `name` file found across `dirs`; returns "" if none exists.
+// `found_path` receives the path that was read.
+bool ReadFirst(const vector<string> &dirs, const char *name, string &contents, string &found_path) {
 	for (auto &dir : dirs) {
-		string path = dir + "/hive-site.xml";
-		string contents;
-		if (!ReadFile(path, contents)) {
-			continue;
+		string path = dir + "/" + name;
+		if (ReadFile(path, contents)) {
+			found_path = path;
+			return true;
 		}
-		HMSSiteConfig cfg = HMSParseSiteConfig(contents);
+	}
+	return false;
+}
+
+} // namespace
+
+HMSSiteConfig HMSLoadSiteConfig() {
+	auto dirs = CandidateConfigDirs();
+
+	// hive-site.xml carries the metastore URI + Hive-specific security settings.
+	HMSSiteConfig cfg;
+	string contents, path;
+	if (ReadFirst(dirs, "hive-site.xml", contents, path)) {
+		cfg = HMSParseSiteConfig(contents);
 		cfg.found = true;
 		cfg.source_path = path;
-		return cfg;
 	}
-	return HMSSiteConfig(); // found = false
+
+	// core-site.xml supplements hadoop.security.authentication (kerberos) when
+	// hive-site.xml doesn't set it directly.
+	string core_contents, core_path;
+	if (cfg.hadoop_auth.empty() && ReadFirst(dirs, "core-site.xml", core_contents, core_path)) {
+		HMSSiteConfig core = HMSParseSiteConfig(core_contents);
+		cfg.hadoop_auth = core.hadoop_auth;
+	}
+
+	// A Kerberized cluster (hadoop.security.authentication=kerberos) implies SASL
+	// even if hive.metastore.sasl.enabled is not set explicitly.
+	if (cfg.hadoop_auth == "kerberos") {
+		cfg.sasl_enabled = true;
+	}
+	return cfg;
 }
 
 string HMSKerberosServiceFromPrincipal(const string &principal) {

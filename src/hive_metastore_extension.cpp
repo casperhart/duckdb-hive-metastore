@@ -7,8 +7,13 @@
 #include "storage/hms_catalog.hpp"
 #include "storage/hms_transaction_manager.hpp"
 #include "hive_metastore_extension.hpp"
+#include "hms_config.hpp"
+
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/database.hpp"
 
 #include <thrift/Thrift.h>
+#include <cstdlib>
 
 namespace duckdb {
 
@@ -53,6 +58,44 @@ public:
 	}
 };
 
+// True unless HMS_AUTOATTACH is set to a falsey value.
+static bool AutoAttachEnabled() {
+	const char *v = std::getenv("HMS_AUTOATTACH");
+	if (v == nullptr || v[0] == '\0') {
+		return true;
+	}
+	auto s = StringUtil::Lower(v);
+	return !(s == "0" || s == "false" || s == "off" || s == "no");
+}
+
+// If a Hive/Hadoop config is discovered on the environment, attach the metastore
+// automatically on LOAD so it's queryable without a manual ATTACH. When nothing
+// is discovered this is a no-op and behaviour matches the original extension.
+static void AutoAttachFromConfig(ExtensionLoader &loader) {
+	if (!AutoAttachEnabled()) {
+		return;
+	}
+	HMSSiteConfig site = HMSLoadSiteConfig();
+	if (!site.found || site.metastore_uris.empty()) {
+		return;
+	}
+
+	string name = "hive_metastore";
+	const char *name_env = std::getenv("HMS_AUTOATTACH_NAME");
+	if (name_env != nullptr && name_env[0] != '\0') {
+		name = name_env;
+	}
+
+	// ATTACH '' re-discovers the URI list from config, so the auto-attached
+	// catalog gets full HA failover. Best-effort and idempotent: a name clash
+	// (e.g. re-LOAD, or the user already attached one) just errors and is
+	// swallowed — the user can still attach manually, which surfaces any real
+	// problem. ATTACH is lazy, so this never touches the metastore at load time.
+	Connection con(loader.GetDatabaseInstance());
+	auto result = con.Query("ATTACH '' AS \"" + name + "\" (TYPE hive_metastore)");
+	(void)result;
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
 	// Thrift logs transport errors (e.g. connection-refused while failing over
 	// across metastore URIs) to stderr by default. Our exceptions already carry
@@ -62,6 +105,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	StorageExtension::Register(config, "hive_metastore", make_uniq<HiveMetastoreStorageExtension>());
 	StorageExtension::Register(config, "hms_catalog", make_uniq<HiveMetastoreStorageExtension>());
+
+	AutoAttachFromConfig(loader);
 }
 
 void HiveMetastoreExtension::Load(ExtensionLoader &loader) {
