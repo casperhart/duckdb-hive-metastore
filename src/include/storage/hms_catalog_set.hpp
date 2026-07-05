@@ -34,6 +34,13 @@ protected:
 
 	void EraseEntryInternal(const string &name);
 
+private:
+	// Populate the entry cache from HMS if it has never loaded or the TTL has
+	// expired. Errors from the metastore (connection refused, SASL/Kerberos
+	// failure, MetaException, ...) propagate to the caller so a broken catalog
+	// surfaces as a clear error rather than silently appearing empty.
+	void EnsureLoaded(ClientContext &context);
+
 protected:
 	Catalog &catalog;
 

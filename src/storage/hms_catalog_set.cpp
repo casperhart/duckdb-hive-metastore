@@ -8,7 +8,7 @@ namespace duckdb {
 HMSCatalogSet::HMSCatalogSet(Catalog &catalog) : catalog(catalog), is_loaded(false), last_load_time() {
 }
 
-optional_ptr<CatalogEntry> HMSCatalogSet::GetEntry(ClientContext &context, const string &name) {
+void HMSCatalogSet::EnsureLoaded(ClientContext &context) {
 	// Check if we need to load entries (either first time or cache expired)
 	bool need_to_load = false;
 	{
@@ -25,21 +25,24 @@ optional_ptr<CatalogEntry> HMSCatalogSet::GetEntry(ClientContext &context, const
 		}
 	}
 
-	// Load entries if needed (CreateEntry will acquire the lock)
-	if (need_to_load) {
-		try {
-			LoadEntries(context);
-			lock_guard<mutex> l(entry_lock);
-			is_loaded = true;
-			last_load_time = std::chrono::steady_clock::now();
-		} catch (std::exception &e) {
-			// HMS is unavailable or errored - mark as loaded with empty entries
-			// This allows queries to return empty results instead of failing
-			lock_guard<mutex> l(entry_lock);
-			is_loaded = true;
-			last_load_time = std::chrono::steady_clock::now();
-		}
+	if (!need_to_load) {
+		return;
 	}
+
+	// LoadEntries reaches out to the metastore and may throw (connection,
+	// SASL/Kerberos, MetaException). We deliberately let that propagate: a
+	// failed connection must surface as an error, not a silently empty catalog.
+	// is_loaded stays false on failure, so the next access retries once the
+	// underlying problem is fixed. GetSchemas/GetTablesInSchema connect before
+	// creating any entry, so a throw leaves the cache untouched (retry-safe).
+	LoadEntries(context);
+	lock_guard<mutex> l(entry_lock);
+	is_loaded = true;
+	last_load_time = std::chrono::steady_clock::now();
+}
+
+optional_ptr<CatalogEntry> HMSCatalogSet::GetEntry(ClientContext &context, const string &name) {
+	EnsureLoaded(context);
 
 	// Now lookup the entry
 	lock_guard<mutex> l(entry_lock);
@@ -60,37 +63,7 @@ void HMSCatalogSet::EraseEntryInternal(const string &name) {
 }
 
 void HMSCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	// Check if we need to load entries (either first time or cache expired)
-	bool need_to_load = false;
-	{
-		lock_guard<mutex> l(entry_lock);
-		if (!is_loaded) {
-			need_to_load = true;
-		} else {
-			// Check if cache is stale (older than TTL)
-			auto now = std::chrono::steady_clock::now();
-			auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_load_time).count();
-			if (elapsed >= CACHE_TTL_SECONDS) {
-				need_to_load = true;
-			}
-		}
-	}
-
-	// Load entries if needed (CreateEntry will acquire the lock)
-	if (need_to_load) {
-		try {
-			LoadEntries(context);
-			lock_guard<mutex> l(entry_lock);
-			is_loaded = true;
-			last_load_time = std::chrono::steady_clock::now();
-		} catch (std::exception &e) {
-			// HMS is unavailable or errored - mark as loaded with empty entries
-			// This allows queries to return empty results instead of failing
-			lock_guard<mutex> l(entry_lock);
-			is_loaded = true;
-			last_load_time = std::chrono::steady_clock::now();
-		}
-	}
+	EnsureLoaded(context);
 
 	// Now scan the entries
 	lock_guard<mutex> l(entry_lock);
