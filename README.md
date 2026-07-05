@@ -176,6 +176,11 @@ The extension reads the ambient Hadoop/Hive configuration — `hive-site.xml` an
   | `HMS_AUTOATTACH` | on | Set to `0`/`false`/`off`/`no` to disable auto-attach |
   | `HMS_AUTOATTACH_NAME` | `hive_metastore` | Catalog name to auto-attach under |
 
+  Note: if the machine carries a *stale* Hadoop config pointing at an
+  unreachable metastore, the auto-attached catalog will make catalog-wide
+  metadata queries (e.g. `SHOW ALL TABLES`) fail when they touch it. Set
+  `HMS_AUTOATTACH=0` (or fix/remove the config) in that case.
+
 - **Endpoint discovery.** `ATTACH '' (TYPE hive_metastore)` (empty path) resolves
   the endpoint(s) from `hive.metastore.uris` instead of requiring an explicit
   `thrift://host:port`.
@@ -204,11 +209,16 @@ secrets or extra ATTACH options are required:
 - **Ticket & realm config** come from the standard Kerberos locations: the
   credential cache (`kinit` / `KRB5CCNAME`) and `krb5.conf` (`KRB5_CONFIG`). Make
   sure you have a valid ticket (`klist`) before attaching.
-- **The metastore URI and Kerberos settings** are read from `hive-site.xml`,
-  located via `HIVE_CONF_DIR`, `HADOOP_CONF_DIR`, `HIVE_HOME/conf`,
-  `HADOOP_HOME/etc/hadoop`, or `/etc/hive/conf`. The service principal is taken
-  from `hive.metastore.kerberos.principal` (e.g. `hive/_HOST@REALM`), with the
-  server host substituted for `_HOST`.
+- **The metastore URI and Kerberos settings** are read from `hive-site.xml`
+  (and `core-site.xml`), located via `HIVE_CONF_DIR`, `HADOOP_CONF_DIR`,
+  `HIVE_HOME/conf`, `HADOOP_HOME/etc/hadoop`, or `/etc/hive/conf`. The service
+  principal is taken from `hive.metastore.kerberos.principal` (e.g.
+  `hive/_HOST@REALM`): a `_HOST` (or absent) instance is substituted with the
+  host you connect to, while a concrete instance (e.g.
+  `hive/ms1.corp.example@REALM`) is used verbatim — so metastores reached
+  through a CNAME/VIP still authenticate against the principal the KDC knows.
+  In both cases the SPN is used literally (lowercased, never rewritten via
+  DNS), matching how Hive's Java clients — Hive CLI, Spark, beeline — behave.
 
 Because the URI can be discovered from config, you may attach without a path:
 
@@ -218,21 +228,29 @@ ATTACH '' AS my_hms (TYPE hive_metastore);
 
 -- Or pass the endpoint explicitly; Kerberos is still auto-detected from config
 ATTACH 'thrift://secure-hms:9083' AS my_hms (TYPE hive_metastore);
+
+-- The KERBEROS option overrides auto-detection in either direction, e.g. a
+-- plaintext dev metastore on a machine that carries kerberized cluster config:
+ATTACH 'thrift://localhost:9083' AS dev_hms (TYPE hive_metastore, KERBEROS false);
 ```
 
 Notes and current limitations:
 
-- Kerberos is enabled **only** when `hive.metastore.sasl.enabled=true` is found in
-  `hive-site.xml`. On non-kerberized clusters the connection is plaintext exactly
-  as before — nothing changes.
+- By default (`KERBEROS 'auto'`), Kerberos is enabled when the discovered config
+  requires SASL: `hive.metastore.sasl.enabled=true` in `hive-site.xml`, or
+  `hadoop.security.authentication=kerberos` (hive-site.xml or core-site.xml)
+  without an explicit `hive.metastore.sasl.enabled=false`. Pass
+  `KERBEROS true`/`KERBEROS false` on ATTACH to override. With no discovered
+  config the connection is plaintext exactly as before — nothing changes.
 - Only `QOP=auth` (authentication, no integrity/encryption wrapping) is
   supported. If the metastore mandates `auth-int`/`auth-conf`
   (`hive.metastore.thrift.sasl.qop`), the handshake will fail with a clear error.
 - Requires a build with GSSAPI support (see [Building](#building)). The target
   machine must have `libgssapi_krb5` available at runtime.
-- SPN/hostname matching is the usual failure point: the metastore's principal
-  must resolve to `hive/<fqdn>@REALM` for the host you connect to. Connect using
-  the FQDN, and ensure DNS/`krb5.conf` canonicalization agree with the SPN.
+- SPN/hostname matching is the usual failure point. No DNS canonicalization is
+  performed (same as Spark/Hive): with a `_HOST` principal, the host you put in
+  the URI is the SPN instance, so connect using the exact FQDN the principal is
+  registered under.
 
 ### Querying Tables
 

@@ -157,6 +157,7 @@ HMSSiteConfig HMSParseSiteConfig(const string &xml_in) {
 			cfg.metastore_uris = SplitCsv(value);
 		} else if (name == "hive.metastore.sasl.enabled") {
 			cfg.sasl_enabled = ParseBool(value);
+			cfg.sasl_set = true;
 		} else if (name == "hive.metastore.kerberos.principal") {
 			cfg.kerberos_principal = value;
 		} else if (name == "hadoop.security.authentication") {
@@ -219,35 +220,48 @@ HMSSiteConfig HMSLoadSiteConfig() {
 	}
 
 	// core-site.xml supplements hadoop.security.authentication (kerberos) when
-	// hive-site.xml doesn't set it directly.
+	// hive-site.xml doesn't set it directly. A core-site.xml alone (no
+	// hive-site.xml) still tells us the cluster is kerberized, so it counts as a
+	// discovered config — an explicit ATTACH endpoint then authenticates with
+	// SASL instead of failing against the secured metastore in plaintext.
 	string core_contents, core_path;
 	if (cfg.hadoop_auth.empty() && ReadFirst(dirs, "core-site.xml", core_contents, core_path)) {
 		HMSSiteConfig core = HMSParseSiteConfig(core_contents);
 		cfg.hadoop_auth = core.hadoop_auth;
+		if (!cfg.found && !cfg.hadoop_auth.empty()) {
+			cfg.found = true;
+			cfg.source_path = core_path;
+		}
 	}
 
 	// A Kerberized cluster (hadoop.security.authentication=kerberos) implies SASL
-	// even if hive.metastore.sasl.enabled is not set explicitly.
-	if (cfg.hadoop_auth == "kerberos") {
+	// when hive.metastore.sasl.enabled is not set explicitly; an explicit
+	// hive.metastore.sasl.enabled=false (an unsecured metastore inside a
+	// kerberized cluster) wins over the cluster-wide default.
+	if (!cfg.sasl_set && cfg.hadoop_auth == "kerberos") {
 		cfg.sasl_enabled = true;
 	}
 	return cfg;
 }
 
-string HMSKerberosServiceFromPrincipal(const string &principal) {
-	// principal is "service/host@REALM"; the service primary is everything
-	// before the first '/'. Default to "hive" (the metastore convention).
+void HMSKerberosPrincipalParts(const string &principal, string &service, string &instance) {
+	// principal is "primary/instance@REALM"; both '/' and '@' parts are optional.
+	// Default the service to "hive" (the metastore convention).
+	service = "hive";
+	instance = "";
 	if (principal.empty()) {
-		return "hive";
+		return;
 	}
-	size_t slash = principal.find('/');
-	if (slash == string::npos || slash == 0) {
-		// No instance component (e.g. "hive@REALM") — take up to '@'.
-		size_t at = principal.find('@');
-		string primary = principal.substr(0, at);
-		return primary.empty() ? "hive" : primary;
+	size_t at = principal.find('@');
+	string without_realm = principal.substr(0, at);
+	size_t slash = without_realm.find('/');
+	string primary = (slash == string::npos) ? without_realm : without_realm.substr(0, slash);
+	if (!primary.empty()) {
+		service = primary;
 	}
-	return principal.substr(0, slash);
+	if (slash != string::npos) {
+		instance = without_realm.substr(slash + 1);
+	}
 }
 
 } // namespace duckdb

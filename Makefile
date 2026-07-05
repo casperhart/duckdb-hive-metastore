@@ -36,6 +36,7 @@ test-kerberos: release
 	  $(KRB_KINIT) -kt $(KRB_SECRETS)/client.keytab client@EXAMPLE.COM
 	@echo "[3/4] Running kerberos tests..."
 	HMS_KERBEROS_TEST=1 \
+	  HMS_AUTOATTACH=1 \
 	  HADOOP_CONF_DIR=$(PROJ_DIR)test/kerberos/client-conf \
 	  KRB5_CONFIG=$(KRB_SECRETS)/krb5.conf \
 	  KRB5CCNAME=FILE:$(KRB_SECRETS)/ccache \

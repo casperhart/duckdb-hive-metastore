@@ -1,6 +1,7 @@
 #include "hms_kerberos.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -120,12 +121,23 @@ private:
 	enum class State { AUTHNEG, SSFCAP, DONE };
 
 	void ImportTargetName() {
-		string sname = service_ + "@" + fqdn_;
+		// Build the SPN the way Hive's Java clients (Hive CLI, Spark, beeline)
+		// effectively do: "service/instance", where the instance — the
+		// principal's concrete instance, or the connect host for _HOST — is
+		// used as given, just lowercased (and any resolver trailing dot
+		// stripped). Import it as a krb5 principal name so krb5 never rewrites
+		// it via DNS: MIT's host-based canonicalization would (e.g. append the
+		// resolver's search domain), which the JVM stack does not do.
+		string instance = StringUtil::Lower(fqdn_);
+		if (!instance.empty() && instance.back() == '.') {
+			instance.pop_back();
+		}
+		string sname = service_ + "/" + instance;
 		gss_buffer_desc name_buf;
 		name_buf.length = sname.size();
 		name_buf.value = const_cast<char *>(sname.data());
 		OM_uint32 min_stat = 0;
-		OM_uint32 maj_stat = gss_import_name(&min_stat, &name_buf, GSS_C_NT_HOSTBASED_SERVICE, &target_);
+		OM_uint32 maj_stat = gss_import_name(&min_stat, &name_buf, GSS_KRB5_NT_PRINCIPAL_NAME, &target_);
 		if (GSS_ERROR(maj_stat)) {
 			throw IOException(GssErrorString("GSSAPI gss_import_name failed for '" + sname + "'", maj_stat, min_stat));
 		}

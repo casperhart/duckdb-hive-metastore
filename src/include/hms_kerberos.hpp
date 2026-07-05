@@ -24,6 +24,12 @@ namespace duckdb {
 // handshake against service principal "<service>/<fqdn>@REALM" using the
 // ambient credential cache, and thereafter length-frames every message exactly
 // like Hive's own TSaslTransport (QOP=auth, no wrapping).
+//
+// The SPN is imported as a literal krb5 principal name (lowercased, trailing
+// resolver dot stripped, no DNS canonicalization), matching how Hive's Java
+// clients (Hive CLI, Spark, beeline) build theirs. `fqdn` is the concrete
+// instance from hive.metastore.kerberos.principal, or the connect host when
+// the principal has a "_HOST" (or no) instance.
 std::shared_ptr<apache::thrift::transport::TTransport>
 HMSMakeKerberosTransport(std::shared_ptr<apache::thrift::transport::TTransport> underlying, const string &service,
                          const string &fqdn);

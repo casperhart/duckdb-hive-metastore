@@ -238,8 +238,9 @@ optional_ptr<CatalogEntry> HMSTableSet::CreateTable(ClientContext &context, Boun
 	// Build Thrift Table
 	auto thrift_table = HMSUtils::BuildThriftTable(context, schema, info, format, hms_catalog.warehouse_location);
 
-	// Call HMS API to create over the transaction's shared connection
-	hms_catalog.GetConnection().Execute([&](HMSClient &client) {
+	// Call HMS API to create over the catalog's shared connection. ExecuteWrite:
+	// a create must not be blindly re-sent after a mid-operation disconnect.
+	hms_catalog.GetConnection().ExecuteWrite([&](HMSClient &client) {
 		HMSAPI::CreateTable(client, thrift_table);
 		return true;
 	});
@@ -266,7 +267,9 @@ optional_ptr<CatalogEntry> HMSTableSet::CreateTable(ClientContext &context, Boun
 
 void HMSTableSet::DropEntry(ClientContext &context, DropInfo &info) {
 	auto &hms_catalog = catalog.Cast<HMSCatalog>();
-	bool dropped = hms_catalog.GetConnection().Execute(
+	// ExecuteWrite: a drop must not be blindly re-sent after a mid-operation
+	// disconnect (the first send may have been applied).
+	bool dropped = hms_catalog.GetConnection().ExecuteWrite(
 	    [&](HMSClient &client) { return HMSAPI::DropTable(client, schema.name, info.name); });
 	if (!dropped) {
 		// Table did not exist in HMS. Without IF EXISTS, surface the error. With IF EXISTS,

@@ -27,14 +27,32 @@ public:
 	}
 };
 
+// Scoped, thread-local suppression of Thrift's GlobalOutput logging. Thrift
+// logs transport errors (e.g. connection-refused during URI failover) to stderr
+// even though our exceptions already carry that detail. GlobalOutput is
+// process-global, so instead of silencing it for every Thrift user in the
+// process, the extension installs a pass-through handler that only drops
+// messages while one of these guards is alive on the current thread — i.e.
+// during our own metastore traffic.
+class HMSThriftLogSuppressor {
+public:
+	HMSThriftLogSuppressor();
+	~HMSThriftLogSuppressor();
+	// True when a suppressor is active on this thread.
+	static bool Active();
+};
+
 // How to authenticate the metastore Thrift connection. Defaults to the historic
 // behaviour: plaintext, no SASL. Kerberos is opt-in and only enabled when the
-// ambient hive-site.xml declares hive.metastore.sasl.enabled=true.
+// ambient config requires SASL or the ATTACH option forces it.
 struct HMSClientAuth {
 	bool kerberos = false;
 	// Kerberos service primary (the part before '/' in the metastore principal).
 	string service = "hive";
-	// Server FQDN used to build the "service/fqdn@REALM" SPN. Empty => use host.
+	// Concrete SPN instance from the metastore principal. Empty => the
+	// principal had a "_HOST" (or no) instance: use each endpoint's own host.
+	// Either way the SPN is built literally (lowercased, no DNS
+	// canonicalization), matching Hive's Java clients.
 	string fqdn;
 };
 

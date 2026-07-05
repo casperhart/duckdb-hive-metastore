@@ -30,7 +30,7 @@ class HMSCatalog : public Catalog {
 public:
 	explicit HMSCatalog(AttachedDatabase &db_p, const string &internal_name, AttachOptions &attach_options,
 	                    string endpoint, const string &default_schema, const string &warehouse_location = "",
-	                    string catalog_name = "hive_metastore");
+	                    string catalog_name = "hive_metastore", HMSKerberosMode kerberos_mode = HMSKerberosMode::AUTO);
 	~HMSCatalog() override;
 
 	string internal_name;

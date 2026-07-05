@@ -37,8 +37,9 @@ SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'khms' AND
 ----
 1
 
-# Explicit endpoint should authenticate the same way (trailing dot keeps the
-# SPN host as "localhost" regardless of the client's DNS search domain).
+# Explicit endpoint should authenticate the same way. The SPN comes verbatim
+# from the principal's concrete instance ("localhost"), independent of the
+# endpoint host spelling.
 statement ok
 ATTACH 'thrift://localhost.:9083' AS khms2 (TYPE hive_metastore);
 
@@ -46,3 +47,19 @@ query I
 SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'khms2';
 ----
 true
+
+# The KERBEROS attach option overrides ambient-config detection. Forcing it on
+# here matches what discovery would have chosen, so authentication still works.
+statement ok
+ATTACH 'thrift://localhost.:9083' AS khms3 (TYPE hive_metastore, KERBEROS true);
+
+query I
+SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'khms3';
+----
+true
+
+# A non-boolean, non-'auto' value is rejected at ATTACH time.
+statement error
+ATTACH 'thrift://localhost.:9083' AS khms4 (TYPE hive_metastore, KERBEROS 'banana');
+----
+banana

@@ -25,12 +25,15 @@ struct HMSSiteConfig {
 	// hive.metastore.sasl.enabled — the signal that the metastore requires
 	// SASL/Kerberos authentication.
 	bool sasl_enabled = false;
+	// True when hive.metastore.sasl.enabled appeared explicitly in hive-site.xml.
+	// An explicit false must not be overridden by hadoop.security.authentication.
+	bool sasl_set = false;
 	// hive.metastore.kerberos.principal, e.g. "hive/_HOST@REALM".
 	string kerberos_principal;
 	// hadoop.security.authentication (from hive-site.xml or core-site.xml). When
-	// "kerberos" it forces SASL on, alongside hive.metastore.sasl.enabled.
+	// "kerberos" it implies SASL unless hive.metastore.sasl.enabled says otherwise.
 	string hadoop_auth;
-	// Absolute path of the hive-site.xml we loaded, for diagnostics.
+	// Absolute path of the config file we loaded, for diagnostics.
 	string source_path;
 };
 
@@ -43,9 +46,11 @@ HMSSiteConfig HMSLoadSiteConfig();
 // the parser can be unit-tested without a filesystem or a live cluster.
 HMSSiteConfig HMSParseSiteConfig(const string &xml);
 
-// Extract the service primary from a Kerberos principal: given "hive/_HOST@REALM"
-// returns "hive". Falls back to "hive" when the principal is empty/unparseable,
-// since that is the metastore default.
-string HMSKerberosServiceFromPrincipal(const string &principal);
+// Split a Kerberos principal "primary/instance@REALM" into its service primary
+// and instance. `service` falls back to "hive" (the metastore default) when the
+// principal is empty/unparseable; `instance` is "" when absent. Callers treat a
+// literal "_HOST" instance as "substitute the endpoint host" (Hive semantics)
+// and a concrete instance as the exact SPN host to authenticate against.
+void HMSKerberosPrincipalParts(const string &principal, string &service, string &instance);
 
 } // namespace duckdb

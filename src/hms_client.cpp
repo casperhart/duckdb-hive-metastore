@@ -9,6 +9,25 @@ namespace duckdb {
 // TCP connect timeout for the metastore socket. Applies to both the plaintext
 // and SASL paths; keeps a dead endpoint from stalling the first catalog access.
 static constexpr int CONNECT_TIMEOUT_MS = 10000;
+// Recv/send timeouts so a server that accepts the connection but stops
+// responding (half-dead network, packet-dropping firewall, peer wedged
+// mid-SASL-handshake) cannot block a query forever. Matches the default of
+// Hive's own client (hive.metastore.client.socket.timeout = 600s).
+static constexpr int SOCKET_TIMEOUT_MS = 600000;
+
+static thread_local int thrift_log_suppress_depth = 0;
+
+HMSThriftLogSuppressor::HMSThriftLogSuppressor() {
+	thrift_log_suppress_depth++;
+}
+
+HMSThriftLogSuppressor::~HMSThriftLogSuppressor() {
+	thrift_log_suppress_depth--;
+}
+
+bool HMSThriftLogSuppressor::Active() {
+	return thrift_log_suppress_depth > 0;
+}
 
 HMSClient::HMSClient(const string &host, int port, const HMSClientAuth &auth)
     : host(host), port(port), connected(false) {
@@ -16,9 +35,14 @@ HMSClient::HMSClient(const string &host, int port, const HMSClientAuth &auth)
 	// Bound the TCP connect so an unreachable/wrong metastore fails fast with a
 	// clear error instead of hanging the query that first touches the catalog.
 	socket->setConnTimeout(CONNECT_TIMEOUT_MS);
+	socket->setRecvTimeout(SOCKET_TIMEOUT_MS);
+	socket->setSendTimeout(SOCKET_TIMEOUT_MS);
 	if (auth.kerberos) {
 		// SASL/GSSAPI: the SASL transport does its own length-framing, so the
 		// binary protocol sits directly on top of it (no TBufferedTransport).
+		// The SPN instance is the principal's concrete instance, or this
+		// endpoint's host for _HOST — used literally either way (Hive/Spark
+		// semantics; see HMSMakeKerberosTransport).
 		transport = HMSMakeKerberosTransport(socket, auth.service, auth.fqdn.empty() ? host : auth.fqdn);
 	} else {
 		// Historic plaintext path — unchanged.

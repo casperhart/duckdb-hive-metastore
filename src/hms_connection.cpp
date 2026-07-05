@@ -3,13 +3,15 @@
 #include "hms_api.hpp"
 #include "hms_config.hpp"
 #include "hms_kerberos.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/string_util.hpp"
 
 #include <random>
 
 namespace duckdb {
 
-HMSConnection::HMSConnection(string attach_path) : attach_path(std::move(attach_path)) {
+HMSConnection::HMSConnection(string attach_path, HMSKerberosMode kerberos_mode)
+    : attach_path(std::move(attach_path)), kerberos_mode(kerberos_mode) {
 }
 
 void HMSConnection::Reset() {
@@ -51,11 +53,33 @@ void HMSConnection::ResolveTargets() {
 		    "found.");
 	}
 
-	// Kerberos only when the metastore config explicitly requires SASL. fqdn is
-	// left empty so each endpoint's own host is used to build its SPN.
-	if (site.found && site.sasl_enabled) {
+	// Kerberos: the ATTACH option (KERBEROS true/false) always wins; AUTO (the
+	// default) enables it only when the discovered metastore config requires
+	// SASL. The SPN follows Hive's SecurityUtil.getServerPrincipal semantics: a
+	// "_HOST" (or absent) instance in the principal means "use each endpoint's
+	// own host"; a concrete instance is used verbatim, so clusters reached via
+	// a CNAME/VIP still authenticate against the principal the KDC knows. In
+	// both cases the SPN is imported literally, with no DNS canonicalization —
+	// exactly like Hive's Java clients (see HMSMakeKerberosTransport).
+	bool use_kerberos;
+	switch (kerberos_mode) {
+	case HMSKerberosMode::ON:
+		use_kerberos = true;
+		break;
+	case HMSKerberosMode::OFF:
+		use_kerberos = false;
+		break;
+	default:
+		use_kerberos = site.found && site.sasl_enabled;
+		break;
+	}
+	if (use_kerberos) {
 		auth.kerberos = true;
-		auth.service = HMSKerberosServiceFromPrincipal(site.kerberos_principal);
+		string instance;
+		HMSKerberosPrincipalParts(site.found ? site.kerberos_principal : string(), auth.service, instance);
+		if (!instance.empty() && instance != "_HOST") {
+			auth.fqdn = instance;
+		}
 	}
 
 	// Random starting URI so load spreads across the HA endpoints (matches
@@ -93,7 +117,9 @@ HMSClient &HMSConnection::GetOrConnect() {
 			if (!errors.empty()) {
 				errors += "; ";
 			}
-			errors += endpoints[idx] + ": " + e.what();
+			// ErrorData extracts the plain message from DuckDB exceptions, whose
+			// what() is a JSON blob that would make the aggregate error unreadable.
+			errors += endpoints[idx] + ": " + ErrorData(e).RawMessage();
 		}
 	}
 	throw IOException("Failed to connect to any Hive Metastore endpoint (%llu tried): %s", (unsigned long long)n,

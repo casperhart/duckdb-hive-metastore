@@ -25,19 +25,26 @@
 
 namespace duckdb {
 
+// Whether to authenticate with Kerberos, from the ATTACH `kerberos` option.
+// AUTO (the default, and the behaviour when the option is absent) follows the
+// ambient hive-site.xml / core-site.xml discovery.
+enum class HMSKerberosMode : uint8_t { AUTO, ON, OFF };
+
 class HMSConnection {
 public:
 	// `attach_path` is the ATTACH target: empty (discover from hive-site.xml), a
 	// single "thrift://host:port", or a comma-separated list of them.
-	explicit HMSConnection(string attach_path);
+	explicit HMSConnection(string attach_path, HMSKerberosMode kerberos_mode = HMSKerberosMode::AUTO);
 
-	// Run `fn` against a live client. On a transport failure the connection is
-	// re-established (failing over across URIs) and `fn` retried exactly once;
-	// logical errors (NoSuchObject, MetaException, ...) propagate unchanged.
-	// `fn` must return a value (wrap void operations to return e.g. true).
+	// Run an idempotent (read) `fn` against a live client. On a transport
+	// failure the connection is re-established (failing over across URIs) and
+	// `fn` retried exactly once; logical errors (NoSuchObject, MetaException,
+	// ...) propagate unchanged. `fn` must return a value (wrap void operations
+	// to return e.g. true).
 	template <class FN>
 	auto Execute(FN &&fn) -> decltype(fn(std::declval<HMSClient &>())) {
 		lock_guard<mutex> lock(conn_lock);
+		HMSThriftLogSuppressor silence_thrift;
 		try {
 			return fn(GetOrConnect());
 		} catch (HMSTransportError &first) {
@@ -51,6 +58,26 @@ public:
 		}
 	}
 
+	// Run a non-idempotent (write) `fn` — CREATE/DROP — against a live client.
+	// Never retried: if the connection drops after the request was sent, the
+	// metastore may or may not have applied it, and blindly re-sending would
+	// turn a succeeded CREATE TABLE into "already exists" (or a succeeded DROP
+	// into "does not exist"). Instead the uncertainty is surfaced to the user.
+	// Connecting itself (with URI failover) happens before `fn` runs and is safe.
+	template <class FN>
+	auto ExecuteWrite(FN &&fn) -> decltype(fn(std::declval<HMSClient &>())) {
+		lock_guard<mutex> lock(conn_lock);
+		HMSThriftLogSuppressor silence_thrift;
+		try {
+			return fn(GetOrConnect());
+		} catch (HMSTransportError &e) {
+			throw IOException("The Hive Metastore connection was lost while executing a catalog-modifying operation; "
+			                  "it may or may not have been applied on the server. Verify the catalog state before "
+			                  "retrying. (%s)",
+			                  e.what());
+		}
+	}
+
 private:
 	// Ensure `client` is open, connecting with URI failover if needed.
 	HMSClient &GetOrConnect();
@@ -61,6 +88,7 @@ private:
 
 	mutex conn_lock;
 	string attach_path;
+	HMSKerberosMode kerberos_mode;
 	bool resolved = false;
 	vector<string> endpoints;
 	HMSClientAuth auth;
