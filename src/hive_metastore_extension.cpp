@@ -115,8 +115,8 @@ static void AutoAttachFromConfig(ExtensionLoader &loader) {
 	// that never asked for it — but it must not vanish silently either: warn on
 	// stderr so a user wondering where their catalog went has a trail.
 	Connection con(loader.GetDatabaseInstance());
-	auto result =
-	    con.Query("ATTACH IF NOT EXISTS '' AS " + KeywordHelper::WriteOptionallyQuoted(name) + " (TYPE hive_metastore)");
+	auto result = con.Query("ATTACH IF NOT EXISTS '' AS " + KeywordHelper::WriteOptionallyQuoted(name) +
+	                        " (TYPE hive_metastore)");
 	if (result->HasError()) {
 		fprintf(stderr, "hive_metastore: auto-attach of the discovered metastore as '%s' failed: %s\n", name.c_str(),
 		        result->GetError().c_str());

@@ -1,6 +1,7 @@
 # name: test/sql/kerberos/kerberos_attach.test
 # description: Authenticate to a Kerberized Hive Metastore over SASL/GSSAPI
 # group: [kerberos]
+
 #
 # Gated on HMS_KERBEROS_TEST so the normal suite skips it. Driven by
 # `make test-kerberos`, which brings up the KDC + kerberized metastore, kinit's

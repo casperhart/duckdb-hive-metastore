@@ -352,8 +352,8 @@ private:
 			status = ReceiveSaslMessage(payload);
 			received_any = true;
 			if (status != SASL_OK && status != SASL_COMPLETE) {
-				throw TTransportException(string("Unexpected SASL status from the Hive Metastore during negotiation. ") +
-				                          kNonSaslServerHint);
+				throw TTransportException(
+				    string("Unexpected SASL status from the Hive Metastore during negotiation. ") + kNonSaslServerHint);
 			}
 			string challenge = gss_.Step(payload);
 			// If the server already signalled COMPLETE, we owe it no further token.

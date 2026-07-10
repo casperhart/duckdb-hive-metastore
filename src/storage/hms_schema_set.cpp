@@ -21,8 +21,7 @@ void HMSSchemaSet::LoadEntries(ClientContext &context) {
 	auto &hms_catalog = catalog.Cast<HMSCatalog>();
 
 	// Fetch schemas over the catalog's shared connection (failover + reconnect).
-	auto schemas =
-	    hms_catalog.GetConnection().Execute([](HMSClient &client) { return HMSAPI::GetSchemas(client); });
+	auto schemas = hms_catalog.GetConnection().Execute([](HMSClient &client) { return HMSAPI::GetSchemas(client); });
 
 	for (const auto &schema : schemas) {
 		CreateSchemaInfo info;

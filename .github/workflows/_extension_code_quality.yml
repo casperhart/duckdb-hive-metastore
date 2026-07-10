@@ -150,7 +150,7 @@ jobs:
         shell: bash
         run: |
             sudo apt-get update -y -qq
-            sudo apt-get install -y -qq ninja-build clang-tidy ccache linux-libc-dev flex bison libcurl4-openssl-dev libssl-dev libthrift-dev thrift-compiler
+            sudo apt-get install -y -qq ninja-build clang-tidy ccache linux-libc-dev flex bison libcurl4-openssl-dev libssl-dev libthrift-dev thrift-compiler libkrb5-dev
             sudo pip3 install pybind11[global] --break-system-packages
 
       - name: Cache ccache

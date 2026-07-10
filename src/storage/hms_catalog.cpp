@@ -35,8 +35,7 @@ HMSCatalog::HMSCatalog(AttachedDatabase &db_p, const string &internal_name, Atta
                        string catalog_name_p, HMSKerberosMode kerberos_mode)
     : Catalog(db_p), internal_name(internal_name), access_mode(attach_options.access_mode),
       endpoint(std::move(endpoint_p)), warehouse_location(warehouse_location), schemas(*this),
-      default_schema(default_schema), catalog_name(std::move(catalog_name_p)),
-      connection(endpoint, kerberos_mode) {
+      default_schema(default_schema), catalog_name(std::move(catalog_name_p)), connection(endpoint, kerberos_mode) {
 }
 
 HMSCatalog::~HMSCatalog() = default;
