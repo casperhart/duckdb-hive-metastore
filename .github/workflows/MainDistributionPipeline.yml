@@ -109,13 +109,50 @@ jobs:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           NINJA_STATUS: '[%f/%t %es] '
 
+  # Kerberos/GSSAPI verification job. Like spark-verify, it runs in parallel
+  # with `test` and is NOT in any `needs:` chain — a Kerberos-side regression
+  # fails its own job without blocking the main `test` job or binary shipping.
+  #
+  # The `test-kerberos` Makefile target is self-contained: it builds the KDC
+  # image, brings up the kerberized metastore stack, kinit's a client ticket
+  # with the host's MIT kinit (from krb5-user), runs the gated
+  # test/sql/kerberos suite against a real GSSAPI handshake, and tears the
+  # stack down even on failure.
+  kerberos-verify:
+    name: Kerberos GSSAPI Verify
+    runs-on: ubuntu-latest
+    env:
+      GEN: ninja
+      TIDY_THREADS: 4
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential cmake ninja-build ccache git linux-libc-dev flex bison libcurl4-openssl-dev libssl-dev libthrift-dev thrift-compiler libkrb5-dev krb5-user
+
+      - name: Cache ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      - name: Run kerberized metastore tests
+        run: |
+          make -j$(nproc) test-kerberos
+        env:
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          NINJA_STATUS: '[%f/%t %es] '
+
   duckdb-stable-build:
     name: Build extension binaries
     needs: test
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.3
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
     with:
-      duckdb_version: v1.5.3
-      ci_tools_version: v1.5.3
+      duckdb_version: v1.5.4
+      ci_tools_version: v1.5.4
       exclude_archs: "${{ github.event_name == 'pull_request' && 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;linux_arm64;linux_amd64_musl;osx_amd64;windows_amd64;windows_arm64;' || 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64_mingw;windows_amd64;windows_arm64;' }}"
       vcpkg_commit: 84bab45d415d22042bd0b9081aea57f362da3f35
       skip_tests: true
@@ -126,7 +163,7 @@ jobs:
     name: Code Quality Check
     uses: ./.github/workflows/_extension_code_quality.yml
     with:
-      duckdb_version: v1.5.3
-      ci_tools_version: v1.5.3
+      duckdb_version: v1.5.4
+      ci_tools_version: v1.5.4
       extension_name: hive_metastore
       format_checks: 'format;tidy'

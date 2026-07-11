@@ -16,6 +16,9 @@ require parquet
 set ignore_error_messages
 
 statement ok
+FORCE INSTALL avro; LOAD avro;
+
+statement ok
 INSTALL iceberg; LOAD iceberg;
 
 statement ok
@@ -31,7 +34,7 @@ ATTACH 'thrift://localhost:9083' AS hms (TYPE hive_metastore);
 # All orders reference valid customers (cycling through 1-100)
 # 200 orders, each has a valid customer match = 200 join results
 query I
-SELECT COUNT(*) FROM hms.sample_db.customers c 
+SELECT COUNT(*) FROM hms.sample_db.customers c
 JOIN hms.sample_db.orders o ON c.customer_id = o.customer_id;
 ----
 200
@@ -56,7 +59,7 @@ statement ok
 SET unsafe_enable_version_guessing = true;
 
 query I
-SELECT COUNT(*) FROM hms.sample_db.inventory i 
+SELECT COUNT(*) FROM hms.sample_db.inventory i
 JOIN hms.sample_db.products p ON i.product_id = p.product_id;
 ----
 75
@@ -74,7 +77,7 @@ ORDER BY order_count DESC;
 
 # Test cross-format complex query
 statement ok
-SELECT 
+SELECT
     p.category,
     COUNT(DISTINCT o.order_id) as num_orders,
     SUM(o.total_amount) as total_revenue,
