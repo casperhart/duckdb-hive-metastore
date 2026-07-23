@@ -101,7 +101,7 @@ static void AutoAttachFromConfig(ExtensionLoader &loader) {
 		return;
 	}
 
-	string name = "hive_metastore";
+	string name = "hms";
 	const char *name_env = std::getenv("HMS_AUTOATTACH_NAME");
 	if (name_env != nullptr && name_env[0] != '\0') {
 		name = name_env;

@@ -154,15 +154,44 @@ vector<Apache::Hadoop::Hive::Table> HMSClient::GetTableObjects(const string &db_
 	if (!connected)
 		Open();
 	vector<Apache::Hadoop::Hive::Table> tables;
+	// Nothing to fetch, and some servers reject an empty name list outright.
+	if (table_names.empty()) {
+		return tables;
+	}
+
+	// Use the request-based call rather than the deprecated
+	// get_table_objects_by_name(dbname, tbl_names). The deprecated method
+	// declares no `throws` in the Thrift IDL, so a server-side MetaException
+	// (e.g. a storage-based-authorization "Permission denied ... access=EXECUTE"
+	// on the table's HDFS path) is flattened by Thrift into a generic
+	// TApplicationException whose message is only the fixed string "Internal
+	// error processing get_table_objects_by_name" — the real cause is lost on
+	// the wire. The _req variant declares its exceptions, so the actual Hive
+	// message reaches the user, and it also lets us advertise client
+	// capabilities so insert-only/ACID tables are returned rather than rejected.
+	Apache::Hadoop::Hive::GetTablesRequest req;
+	req.__set_dbName(db_name);
+	req.__set_tblNames(table_names);
+	Apache::Hadoop::Hive::ClientCapabilities capabilities;
+	capabilities.__set_values({Apache::Hadoop::Hive::ClientCapability::INSERT_ONLY_TABLES});
+	req.__set_capabilities(capabilities);
+
+	Apache::Hadoop::Hive::GetTablesResult result;
 	try {
-		client->get_table_objects_by_name(tables, db_name, table_names);
+		client->get_table_objects_by_name_req(result, req);
 	} catch (apache::thrift::transport::TTransportException &tx) {
 		connected = false;
 		throw HMSTransportError(tx.what());
+	} catch (Apache::Hadoop::Hive::MetaException &e) {
+		throw IOException("Failed to get table objects for database '%s': %s", db_name, e.message);
+	} catch (Apache::Hadoop::Hive::UnknownDBException &e) {
+		throw IOException("Failed to get table objects for database '%s': unknown database: %s", db_name, e.message);
+	} catch (Apache::Hadoop::Hive::InvalidOperationException &e) {
+		throw IOException("Failed to get table objects for database '%s': %s", db_name, e.message);
 	} catch (apache::thrift::TException &tx) {
 		throw IOException("Failed to get table objects for database '%s': %s", db_name, tx.what());
 	}
-	return tables;
+	return std::move(result.tables);
 }
 
 void HMSClient::CreateTable(const Apache::Hadoop::Hive::Table &table) {
