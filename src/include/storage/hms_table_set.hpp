@@ -22,6 +22,11 @@ public:
 	~HMSTableSet() override = default;
 
 public:
+	// Lazy single-table lookup: serve from cache, else fetch just this one table
+	// with a single get_table — never a whole-schema load. Returns nullptr for an
+	// unknown table so DuckDB emits its standard "table does not exist".
+	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name) override;
+
 	optional_ptr<CatalogEntry> CreateTable(ClientContext &context, BoundCreateTableInfo &info);
 
 	unique_ptr<HMSTableInfo> GetTableInfo(ClientContext &context, HMSSchemaEntry &schema, const string &table_name);

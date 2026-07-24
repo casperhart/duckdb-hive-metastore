@@ -117,6 +117,37 @@ void HMSTableSet::LoadEntries(ClientContext &context) {
 	}
 }
 
+optional_ptr<CatalogEntry> HMSTableSet::GetEntry(ClientContext &context, const string &name) {
+	// Lazy single-table load. A DESCRIBE/SELECT of one table must not drag in the
+	// whole schema — which, for every Delta/Iceberg sibling, would also open that
+	// table's remote metadata (transaction log / manifest). Serve from cache if
+	// present; otherwise fetch just this one table with a single get_table.
+	if (auto cached = GetCachedEntry(name)) {
+		return cached;
+	}
+
+	unique_ptr<HMSTableInfo> table_info;
+	try {
+		table_info = GetTableInfo(context, schema, name);
+	} catch (const HMSTableNotFoundError &) {
+		// Unknown table: return a null lookup so DuckDB emits its standard
+		// "table does not exist" (with name suggestions) instead of an IOException.
+		return nullptr;
+	}
+	if (!table_info) {
+		return nullptr;
+	}
+
+	auto table_entry = make_uniq<HMSTableEntry>(catalog, schema, *table_info);
+	// table_data is required by GetScanFunction (format detection, partition-aware
+	// scans). The HMSTableInfo constructor does not copy it, so attach it here —
+	// mirroring CreateTable — or a later SELECT would hit a null table_data.
+	if (table_info->table_data) {
+		table_entry->table_data = make_uniq<HMSAPITable>(*table_info->table_data);
+	}
+	return CreateEntry(std::move(table_entry));
+}
+
 optional_ptr<CatalogEntry> HMSTableSet::RefreshTable(ClientContext &context, const string &table_name) {
 	auto table_info = GetTableInfo(context, schema, table_name);
 	if (!table_info) {
@@ -137,6 +168,10 @@ unique_ptr<HMSTableInfo> HMSTableSet::GetTableInfo(ClientContext &context, HMSSc
 	try {
 		ht = hms_catalog.GetConnection().Execute(
 		    [&](HMSClient &client) { return client.GetTable(schema.name, table_name); });
+	} catch (const HMSTableNotFoundError &) {
+		// Preserve "not found" unchanged so callers (lazy GetEntry) can translate
+		// it into a null lookup rather than a hard error.
+		throw;
 	} catch (const std::exception &ex) {
 		throw IOException("Failed to fetch table info for '%s.%s': %s", schema.name.c_str(), table_name.c_str(),
 		                  ex.what());

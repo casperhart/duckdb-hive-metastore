@@ -23,7 +23,7 @@ public:
 	explicit HMSCatalogSet(Catalog &catalog);
 	virtual ~HMSCatalogSet() = default;
 
-	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name);
+	virtual optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name);
 	virtual void DropEntry(ClientContext &context, DropInfo &info);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	virtual optional_ptr<CatalogEntry> CreateEntry(unique_ptr<CatalogEntry> entry);
@@ -33,6 +33,11 @@ protected:
 	virtual void LoadEntries(ClientContext &context) = 0;
 
 	void EraseEntryInternal(const string &name);
+
+	// Look up an already-cached entry without triggering a load. Returns nullptr
+	// if the entry is not resident. Used by lazy subclasses that populate the
+	// cache one table at a time instead of loading the whole schema.
+	optional_ptr<CatalogEntry> GetCachedEntry(const string &name);
 
 private:
 	// Populate the entry cache from HMS if it has never loaded or the TTL has

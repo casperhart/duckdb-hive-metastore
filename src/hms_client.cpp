@@ -1,6 +1,7 @@
 #include "hms_client.hpp"
 #include "hms_kerberos.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include <thrift/transport/TTransportException.h>
 #include <cstdio>
 
@@ -139,7 +140,11 @@ Apache::Hadoop::Hive::Table HMSClient::GetTable(const string &db_name, const str
 	try {
 		client->get_table(table, db_name, table_name);
 	} catch (Apache::Hadoop::Hive::NoSuchObjectException &e) {
-		throw IOException("Table '%s.%s' not found: %s", db_name, table_name, e.message);
+		// Not a failure: the table simply doesn't exist. Surface a distinct type so
+		// the catalog layer can translate it into a null lookup (DuckDB then emits
+		// its standard "table does not exist") rather than an IOException.
+		throw HMSTableNotFoundError(
+		    StringUtil::Format("Table '%s.%s' not found: %s", db_name, table_name, e.message));
 	} catch (apache::thrift::transport::TTransportException &tx) {
 		connected = false;
 		throw HMSTransportError(tx.what());

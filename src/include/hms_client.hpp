@@ -27,6 +27,18 @@ public:
 	}
 };
 
+// Raised by HMSClient::GetTable when the metastore reports the table does not
+// exist (NoSuchObject). Distinct from HMSTransportError (a transport failure)
+// and from a generic IOException (a real metastore/logical error) so the catalog
+// layer can translate "not found" into a null lookup — letting DuckDB emit its
+// standard "table does not exist" (with name suggestions) — while genuine
+// failures still propagate as errors.
+class HMSTableNotFoundError : public std::runtime_error {
+public:
+	explicit HMSTableNotFoundError(const string &msg) : std::runtime_error(msg) {
+	}
+};
+
 // Scoped, thread-local suppression of Thrift's GlobalOutput logging. Thrift
 // logs transport errors (e.g. connection-refused during URI failover) to stderr
 // even though our exceptions already carry that detail. GlobalOutput is

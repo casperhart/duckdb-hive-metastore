@@ -43,8 +43,10 @@ void HMSCatalogSet::EnsureLoaded(ClientContext &context) {
 
 optional_ptr<CatalogEntry> HMSCatalogSet::GetEntry(ClientContext &context, const string &name) {
 	EnsureLoaded(context);
+	return GetCachedEntry(name);
+}
 
-	// Now lookup the entry
+optional_ptr<CatalogEntry> HMSCatalogSet::GetCachedEntry(const string &name) {
 	lock_guard<mutex> l(entry_lock);
 	auto entry = entries.find(name);
 	if (entry == entries.end()) {
@@ -77,12 +79,21 @@ optional_ptr<CatalogEntry> HMSCatalogSet::CreateEntry(unique_ptr<CatalogEntry> e
 		throw InternalException("HMSCatalogSet::CreateEntry called with null entry");
 	}
 	lock_guard<mutex> l(entry_lock);
-	auto result = entry.get();
-	if (result->name.empty()) {
+	if (entry->name.empty()) {
 		throw InternalException("HMSCatalogSet::CreateEntry called with empty name");
 	}
-	entries.insert(make_pair(result->name, std::move(entry)));
-	return result;
+	// Copy the key before moving `entry` — argument evaluation order within a
+	// single make_pair(...) call is unspecified, so we must not read entry->name
+	// in the same expression that moves entry.
+	string entry_name = entry->name;
+	// insert() does not overwrite an existing key: on a conflict the freshly-built
+	// `entry` is dropped here. Return the pointer that is actually stored (the
+	// pre-existing entry on conflict, the new one otherwise) — never a pointer
+	// captured before the move, which would dangle after the drop. Keeping the
+	// existing entry (rather than replacing it) also avoids freeing an entry that
+	// an in-flight query may still hold a raw pointer to.
+	auto inserted = entries.insert(make_pair(std::move(entry_name), std::move(entry)));
+	return inserted.first->second.get();
 }
 
 void HMSCatalogSet::ClearEntries() {
