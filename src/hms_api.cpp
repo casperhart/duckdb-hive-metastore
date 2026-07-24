@@ -45,14 +45,12 @@ vector<HMSAPISchema> HMSAPI::GetSchemas(HMSClient &client) {
 	return schemas;
 }
 
-vector<HMSAPITable> HMSAPI::GetTablesInSchema(HMSClient &client, const string &schema) {
-	auto table_names = client.GetAllTables(schema);
-
-	// Fetch details for all tables (potentially in batches if GetTableObjects supports it)
-	// The current HMSClient::GetTableObjects implementation takes a list of names.
-	auto hive_tables = client.GetTableObjects(schema, table_names);
-
+// Map Thrift Table structs to the extension's HMSAPITable, applying the
+// Iceberg metadata_location fix-up. Shared by the whole-schema load and the
+// name-subset batch fetch.
+static vector<HMSAPITable> MapHiveTables(const vector<Apache::Hadoop::Hive::Table> &hive_tables) {
 	vector<HMSAPITable> result;
+	result.reserve(hive_tables.size());
 	for (const auto &ht : hive_tables) {
 		HMSAPITable t;
 		t.name = ht.tableName;
@@ -104,6 +102,19 @@ vector<HMSAPITable> HMSAPI::GetTablesInSchema(HMSClient &client, const string &s
 	}
 
 	return result;
+}
+
+vector<HMSAPITable> HMSAPI::GetTablesInSchema(HMSClient &client, const string &schema) {
+	auto table_names = client.GetAllTables(schema);
+	// The current HMSClient::GetTableObjects implementation takes a list of names.
+	return MapHiveTables(client.GetTableObjects(schema, table_names));
+}
+
+vector<HMSAPITable> HMSAPI::GetTableObjects(HMSClient &client, const string &schema, const vector<string> &names) {
+	if (names.empty()) {
+		return {};
+	}
+	return MapHiveTables(client.GetTableObjects(schema, names));
 }
 
 vector<HMSAPIPartition> HMSAPI::GetPartitions(HMSClient &client, const string &db_name, const string &table_name) {

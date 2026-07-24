@@ -22,6 +22,8 @@
 namespace duckdb {
 
 HMSTableSet::HMSTableSet(HMSSchemaEntry &schema) : HMSInSchemaSet(schema) {
+	// Tables participate in bounded LRU eviction (schemas do not).
+	apply_capacity = true;
 }
 
 static ColumnDefinition CreateColumnDefinition(ClientContext &context, HMSAPIColumnDefinition &coldef) {
@@ -82,6 +84,28 @@ static void ResolveTableColumns(ClientContext &context, Catalog &catalog, Schema
 	}
 }
 
+// Build a catalog entry from one HMS table's metadata. Shared by the whole-schema
+// load and the streaming Scan so a lazily-built entry is identical to a bulk one.
+static unique_ptr<HMSTableEntry> BuildTableEntry(ClientContext &context, Catalog &catalog, HMSSchemaEntry &schema,
+                                                 HMSAPITable &table) {
+	CreateTableInfo info;
+	info.table = table.name;
+
+	ResolveTableColumns(context, catalog, schema, table, info.columns);
+
+	// Add HMS metadata as tags for inter-extension communication (e.g., with OpenLineage)
+	// This allows other extensions to access HMS metadata without code dependencies
+	info.tags["hms_storage_location"] = table.storage_location;
+	info.tags["hms_table_type"] = table.table_type;
+	info.tags["hms_input_format"] = table.input_format;
+	info.tags["hms_output_format"] = table.output_format;
+	info.tags["hms_serialization_lib"] = table.serialization_lib;
+
+	auto table_entry = make_uniq<HMSTableEntry>(catalog, schema, info);
+	table_entry->table_data = make_uniq<HMSAPITable>(table);
+	return table_entry;
+}
+
 void HMSTableSet::LoadEntries(ClientContext &context) {
 	auto &hms_catalog = catalog.Cast<HMSCatalog>();
 
@@ -98,22 +122,73 @@ void HMSTableSet::LoadEntries(ClientContext &context) {
 			// The HMS API returned a table for the wrong database
 			continue;
 		}
-		CreateTableInfo info;
-		info.table = table.name;
+		CreateEntry(BuildTableEntry(context, catalog, schema, table));
+	}
+}
 
-		ResolveTableColumns(context, catalog, schema, table, info.columns);
+void HMSTableSet::RefreshCapacity(ClientContext &context) {
+	idx_t cap = HMS_DEFAULT_TABLE_CACHE_SIZE;
+	Value val;
+	if (context.TryGetCurrentSetting("hms_table_cache_size", val)) {
+		cap = val.GetValue<idx_t>();
+	}
+	catalog.Cast<HMSCatalog>().GetEntryCache().SetCapacity(cap);
+}
 
-		// Add HMS metadata as tags for inter-extension communication (e.g., with OpenLineage)
-		// This allows other extensions to access HMS metadata without code dependencies
-		info.tags["hms_storage_location"] = table.storage_location;
-		info.tags["hms_table_type"] = table.table_type;
-		info.tags["hms_input_format"] = table.input_format;
-		info.tags["hms_output_format"] = table.output_format;
-		info.tags["hms_serialization_lib"] = table.serialization_lib;
+void HMSTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	RefreshCapacity(context);
+	auto &hms_catalog = catalog.Cast<HMSCatalog>();
 
-		auto table_entry = make_uniq<HMSTableEntry>(catalog, schema, info);
-		table_entry->table_data = make_uniq<HMSAPITable>(table);
-		CreateEntry(std::move(table_entry));
+	// Authoritative, always-fresh table list. Cheap (names only). We do not rely on
+	// the resident map being complete because LRU eviction may have removed entries.
+	auto names = hms_catalog.GetConnection().Execute(
+	    [&](HMSClient &client) { return client.GetAllTables(schema.name); });
+
+	// Process in chunks so peak memory (fetched table objects + freshly-built
+	// entries) is bounded even for a very large schema; each chunk's misses are
+	// fetched in a single batch RPC rather than one get_table per table.
+	constexpr idx_t CHUNK = 1000;
+	for (idx_t start = 0; start < names.size(); start += CHUNK) {
+		idx_t end = start + CHUNK < names.size() ? start + CHUNK : names.size();
+
+		// Phase 1: deliver entries already resident, and collect the misses. These
+		// are delivered before any building below, so a later build's eviction can
+		// never drop one of them undelivered.
+		vector<string> missing;
+		for (idx_t i = start; i < end; i++) {
+			if (auto cached = GetCachedEntry(names[i])) {
+				callback(*cached);
+			} else {
+				missing.push_back(names[i]);
+			}
+		}
+		if (missing.empty()) {
+			continue;
+		}
+
+		// Phase 2: one batch fetch for this chunk's misses, then build + deliver each
+		// immediately. Building inserts into the cache and may evict — but only
+		// already-delivered entries (phase-1 hits or earlier phase-2 builds), never
+		// one still pending, so the listing stays complete.
+		auto fetched = hms_catalog.GetConnection().Execute(
+		    [&](HMSClient &client) { return HMSAPI::GetTableObjects(client, schema.name, missing); });
+		case_insensitive_map_t<HMSAPITable> by_name;
+		for (auto &t : fetched) {
+			if (schema.name != t.db_name) {
+				continue;
+			}
+			by_name[t.name] = std::move(t);
+		}
+		for (auto &name : missing) {
+			auto it = by_name.find(name);
+			if (it == by_name.end()) {
+				continue; // dropped between get_all_tables and the batch fetch
+			}
+			auto entry = CreateEntry(BuildTableEntry(context, catalog, schema, it->second));
+			if (entry) {
+				callback(*entry);
+			}
+		}
 	}
 }
 
@@ -122,6 +197,7 @@ optional_ptr<CatalogEntry> HMSTableSet::GetEntry(ClientContext &context, const s
 	// whole schema — which, for every Delta/Iceberg sibling, would also open that
 	// table's remote metadata (transaction log / manifest). Serve from cache if
 	// present; otherwise fetch just this one table with a single get_table.
+	RefreshCapacity(context);
 	if (auto cached = GetCachedEntry(name)) {
 		return cached;
 	}

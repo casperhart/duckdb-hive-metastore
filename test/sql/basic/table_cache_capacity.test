@@ -1,0 +1,77 @@
+# name: test/sql/basic/table_cache_capacity.test
+# description: Bounded LRU table-entry cache (hms_table_cache_size) stays correct under eviction
+# group: [basic]
+
+require hive_metastore
+
+require-env HMS_TEST_AVAILABLE
+
+require parquet
+
+require httpfs
+
+# Force a tiny cache so a schema larger than the cap exercises LRU eviction
+# mid-listing. The setting is registered when the extension loads.
+statement ok
+SET hms_table_cache_size = 2;
+
+statement ok
+CREATE OR REPLACE SECRET s3 (TYPE S3, PROVIDER config, KEY_ID 'minioadmin', SECRET 'minioadmin', ENDPOINT 'localhost:9000', REGION 'us-east-1', URL_STYLE 'path', USE_SSL false);
+
+statement ok
+ATTACH 'thrift://localhost:9083' AS hms (TYPE hive_metastore);
+
+# Completeness under eviction: sample_db has far more tables than the cap of 2,
+# so the streaming Scan evicts entries mid-listing. Every table must still be
+# listed — an evicted-but-not-yet-delivered row must never be dropped. Filter
+# out tables other tests may have created ('duck_' prefix) for robustness.
+query T
+SELECT table_name FROM information_schema.tables
+WHERE table_catalog='hms' AND table_schema='sample_db' AND table_name NOT LIKE 'duck\_%' ESCAPE '\'
+ORDER BY table_name;
+----
+cross_engine_parquet
+customers
+decimal_partitioned
+inventory
+multi_partition
+orders
+products
+reviews
+shipments
+spark_writable_parquet
+type_test
+
+# Listing is idempotent: a second scan (entries were evicted/retired, then the
+# retirement bin drained at the previous statement's transaction boundary) must
+# reload and return the same complete set.
+query I
+SELECT count(*) FROM information_schema.tables
+WHERE table_catalog='hms' AND table_schema='sample_db' AND table_name NOT LIKE 'duck\_%' ESCAPE '\';
+----
+11
+
+# Single-table lookups still work after the schema was evicted down to the cap:
+# each DESCRIBE re-fetches just its table.
+query I
+SELECT count(*) >= 1 FROM information_schema.columns
+WHERE table_catalog='hms' AND table_schema='sample_db' AND table_name='multi_partition';
+----
+true
+
+# End-to-end scan of a partitioned Parquet table under the tiny cap: the lazily
+# (re)built entry must still drive the partition-aware scan correctly.
+query I
+SELECT count(*) > 0 FROM hms.sample_db.multi_partition;
+----
+true
+
+# Unbounded mode (0) must also keep working.
+statement ok
+SET hms_table_cache_size = 0;
+
+query I
+SELECT count(*) FROM information_schema.tables
+WHERE table_catalog='hms' AND table_schema='sample_db' AND table_name NOT LIKE 'duck\_%' ESCAPE '\';
+----
+11

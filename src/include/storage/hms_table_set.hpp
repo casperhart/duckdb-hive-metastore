@@ -27,6 +27,11 @@ public:
 	// unknown table so DuckDB emits its standard "table does not exist".
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name) override;
 
+	// Streaming listing: fetch the authoritative table names fresh, batch-load the
+	// ones not already cached, and deliver each to the callback. Does not rely on
+	// the resident map being complete, so it stays correct under LRU eviction.
+	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) override;
+
 	optional_ptr<CatalogEntry> CreateTable(ClientContext &context, BoundCreateTableInfo &info);
 
 	unique_ptr<HMSTableInfo> GetTableInfo(ClientContext &context, HMSSchemaEntry &schema, const string &table_name);
@@ -38,6 +43,9 @@ public:
 
 protected:
 	void LoadEntries(ClientContext &context) override;
+
+	// Update the shared cache capacity from the hms_table_cache_size setting.
+	void RefreshCapacity(ClientContext &context);
 
 	void AlterTable(ClientContext &context, RenameTableInfo &info);
 	void AlterTable(ClientContext &context, RenameColumnInfo &info);

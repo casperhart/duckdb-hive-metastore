@@ -2,8 +2,16 @@
 #include "storage/hms_transaction.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "storage/hms_schema_entry.hpp"
+#include "storage/hms_catalog.hpp"
 
 namespace duckdb {
+
+// When a long-running transaction pins the retirement bin (it can't be drained
+// until that transaction ends), stop evicting once the bin reaches this multiple
+// of the cap rather than growing it without bound. The live map is then allowed
+// to exceed the cap: memory stays finite and correctness is preserved; the cap
+// is merely soft under this rare condition.
+static constexpr idx_t RETIRE_BACKSTOP_FACTOR = 4;
 
 HMSCatalogSet::HMSCatalogSet(Catalog &catalog) : catalog(catalog), is_loaded(false), last_load_time() {
 }
@@ -52,7 +60,61 @@ optional_ptr<CatalogEntry> HMSCatalogSet::GetCachedEntry(const string &name) {
 	if (entry == entries.end()) {
 		return nullptr;
 	}
+	LRUTouch(name);
 	return entry->second.get();
+}
+
+void HMSCatalogSet::LRUInsertFront(const string &name) {
+	lru_list.push_front(name);
+	lru_pos[name] = lru_list.begin();
+}
+
+void HMSCatalogSet::LRUTouch(const string &name) {
+	auto it = lru_pos.find(name);
+	if (it == lru_pos.end()) {
+		return;
+	}
+	lru_list.erase(it->second);
+	lru_list.push_front(name);
+	it->second = lru_list.begin();
+}
+
+void HMSCatalogSet::LRUErase(const string &name) {
+	auto it = lru_pos.find(name);
+	if (it == lru_pos.end()) {
+		return;
+	}
+	lru_list.erase(it->second);
+	lru_pos.erase(it);
+}
+
+void HMSCatalogSet::EvictToCapacity() {
+	if (!apply_capacity) {
+		return;
+	}
+	auto &cache = catalog.Cast<HMSCatalog>().GetEntryCache();
+	idx_t cap = cache.GetCapacity();
+	if (cap == 0) {
+		return; // unbounded
+	}
+	while (entries.size() > cap && !lru_list.empty()) {
+		// Backstop against a long-running transaction pinning the retirement bin.
+		if (cache.RetiredCount() >= cap * RETIRE_BACKSTOP_FACTOR) {
+			break;
+		}
+		// Evict the least-recently-used entry. Hand its shared_ptr to the catalog's
+		// retirement bin instead of freeing it: a query bound earlier in the current
+		// (or a concurrent) transaction may still hold a raw pointer to it. The bin
+		// is freed only once no transaction is in flight (see HMSEntryCache).
+		string victim = lru_list.back();
+		auto e = entries.find(victim);
+		if (e != entries.end()) {
+			cache.Retire(std::move(e->second));
+			entries.erase(e);
+		}
+		lru_pos.erase(victim);
+		lru_list.pop_back();
+	}
 }
 
 void HMSCatalogSet::DropEntry(ClientContext &context, DropInfo &info) {
@@ -62,6 +124,7 @@ void HMSCatalogSet::DropEntry(ClientContext &context, DropInfo &info) {
 void HMSCatalogSet::EraseEntryInternal(const string &name) {
 	lock_guard<mutex> l(entry_lock);
 	entries.erase(name);
+	LRUErase(name);
 }
 
 void HMSCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
@@ -82,23 +145,32 @@ optional_ptr<CatalogEntry> HMSCatalogSet::CreateEntry(unique_ptr<CatalogEntry> e
 	if (entry->name.empty()) {
 		throw InternalException("HMSCatalogSet::CreateEntry called with empty name");
 	}
-	// Copy the key before moving `entry` — argument evaluation order within a
-	// single make_pair(...) call is unspecified, so we must not read entry->name
-	// in the same expression that moves entry.
+	// Copy the key before moving `entry`, and take shared ownership so the object
+	// survives eviction from the map (evicted entries are parked in the catalog's
+	// retirement bin until no query can hold a pointer to them).
 	string entry_name = entry->name;
+	shared_ptr<CatalogEntry> shared = std::move(entry);
 	// insert() does not overwrite an existing key: on a conflict the freshly-built
-	// `entry` is dropped here. Return the pointer that is actually stored (the
-	// pre-existing entry on conflict, the new one otherwise) — never a pointer
-	// captured before the move, which would dangle after the drop. Keeping the
-	// existing entry (rather than replacing it) also avoids freeing an entry that
-	// an in-flight query may still hold a raw pointer to.
-	auto inserted = entries.insert(make_pair(std::move(entry_name), std::move(entry)));
-	return inserted.first->second.get();
+	// entry is dropped and the pre-existing one is kept (never freed — an in-flight
+	// query may hold a raw pointer to it). Return whichever pointer is actually
+	// stored, never a pointer captured before a move that could dangle.
+	auto inserted = entries.insert(make_pair(entry_name, shared));
+	if (!inserted.second) {
+		LRUTouch(entry_name);
+		return inserted.first->second.get();
+	}
+	LRUInsertFront(entry_name);
+	// Enforce the cap. The just-inserted entry is most-recently-used, so eviction
+	// (from the LRU tail) never targets it.
+	EvictToCapacity();
+	return shared.get();
 }
 
 void HMSCatalogSet::ClearEntries() {
 	lock_guard<mutex> l(entry_lock);
 	entries.clear();
+	lru_list.clear();
+	lru_pos.clear();
 	is_loaded = false;
 }
 

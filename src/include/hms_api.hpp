@@ -53,6 +53,10 @@ public:
 	static vector<HMSAPISchema> GetSchemas(HMSClient &client);
 	static vector<HMSAPITable> GetTablesInSchema(HMSClient &client, const string &schema);
 
+	// Fetch table metadata for a specific set of names in one batch call. Used by
+	// the streaming catalog Scan to load only the tables not already cached.
+	static vector<HMSAPITable> GetTableObjects(HMSClient &client, const string &schema, const vector<string> &names);
+
 	// List the partitions of a partitioned table, in HMS's declared partition-key
 	// order. Used to drive partition-aware scans where the metastore (not the
 	// on-disk path layout) determines each partition's values and location.

@@ -82,10 +82,18 @@ public:
 		return connection;
 	}
 
+	// Per-catalog coordinator for bounded table-entry caching: capacity, in-flight
+	// transaction count, and the retirement bin that keeps evicted entries alive
+	// until no query can hold a pointer to them.
+	HMSEntryCache &GetEntryCache() {
+		return entry_cache;
+	}
+
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
 
 private:
+	HMSEntryCache entry_cache;
 	HMSSchemaSet schemas;
 	string default_schema;
 	HMSConnection connection;
