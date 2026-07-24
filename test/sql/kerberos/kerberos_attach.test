@@ -13,11 +13,11 @@ require hive_metastore
 
 require-env HMS_KERBEROS_TEST
 
-# The extension auto-attached the metastore as 'hive_metastore' on load (because
+# The extension auto-attached the metastore as 'hms' on load (because
 # HADOOP_CONF_DIR points at a kerberized config). Reaching its schemas proves
 # the auto-attached catalog authenticated over GSSAPI too.
 query I
-SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'hive_metastore';
+SELECT count(*) >= 1 FROM information_schema.schemata WHERE catalog_name = 'hms';
 ----
 true
 

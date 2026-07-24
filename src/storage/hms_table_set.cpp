@@ -1,5 +1,6 @@
 #include "hms_api.hpp"
 #include "hms_utils.hpp"
+#include "hms_format_detector.hpp"
 
 #include "storage/hms_catalog.hpp"
 #include "storage/hms_table_set.hpp"
@@ -28,6 +29,59 @@ static ColumnDefinition CreateColumnDefinition(ClientContext &context, HMSAPICol
 	return {coldef.name, HMSUtils::TypeToLogicalType(context, coldef.type)};
 }
 
+// Resolve a table's DuckDB column list from HMS metadata, appending them to
+// `columns`. For non-partitioned Parquet/ORC/text tables the metastore is the
+// source of truth — matching Spark, which reads the catalog schema rather than
+// opening the data files — so the schema comes from metadata alone and this
+// does no remote I/O. Doing per-table file reads here is what made
+// listing/DESCRIBE pay remote-storage latency for every table in the schema.
+//
+// Delta/Iceberg still require remote discovery because their real schema lives
+// in the table's own metadata (the transaction log / manifest), not HMS.
+// Partitioned Parquet uses HMS metadata like any other Parquet table: the
+// partition-aware scan (HMSMultiFileReader) emits partition columns in HMS's
+// declared order, so the catalog schema built here — data columns followed by
+// partition keys in declared order — matches the scan output positionally.
+static void ResolveTableColumns(ClientContext &context, Catalog &catalog, SchemaCatalogEntry &schema,
+                                HMSAPITable &table_data, ColumnList &columns) {
+	auto format = hms::FormatDetector::Detect(table_data);
+	if (format.IsDelta() || format.IsIceberg()) {
+		vector<ColumnDefinition> discovered_columns;
+		if (HMSTableEntry::DiscoverDynamicSchema(context, catalog, schema, table_data, discovered_columns)) {
+			for (auto &col : discovered_columns) {
+				columns.AddColumn(std::move(col));
+			}
+			return;
+		}
+		// Discovery failed (e.g. path unreadable): fall back to HMS metadata below.
+	}
+
+	// Prefer the Spark schema in table properties: it carries full type fidelity
+	// and already includes partition columns. Cheap parse of metadata we already
+	// fetched.
+	vector<HMSAPIColumnDefinition> spark_columns;
+	if (HMSUtils::ParseSparkSchema(table_data.parameters, spark_columns)) {
+		for (auto &col : spark_columns) {
+			// col.type is already a DuckDB LogicalType string (e.g. "INTEGER", "STRUCT(...)")
+			auto logical_type = TransformStringToLogicalType(col.type, context);
+			columns.AddColumn(ColumnDefinition(col.name, logical_type));
+		}
+		return;
+	}
+
+	// Fall back to the Hive columns. sd.cols excludes partition keys, so append
+	// them explicitly — Hive/Spark expose partition columns as part of the table
+	// schema, listed after the data columns.
+	for (auto &col : table_data.columns) {
+		auto logical_type = HMSUtils::TypeToLogicalType(context, col.type);
+		columns.AddColumn(ColumnDefinition(col.name, logical_type));
+	}
+	for (auto &pk : table_data.partition_keys) {
+		auto logical_type = HMSUtils::TypeToLogicalType(context, pk.type);
+		columns.AddColumn(ColumnDefinition(pk.name, logical_type));
+	}
+}
+
 void HMSTableSet::LoadEntries(ClientContext &context) {
 	auto &hms_catalog = catalog.Cast<HMSCatalog>();
 
@@ -47,30 +101,7 @@ void HMSTableSet::LoadEntries(ClientContext &context) {
 		CreateTableInfo info;
 		info.table = table.name;
 
-		// Try to discover dynamic schema for Parquet/Delta/Iceberg tables
-		vector<ColumnDefinition> discovered_columns;
-		if (HMSTableEntry::DiscoverDynamicSchema(context, catalog, schema, table, discovered_columns)) {
-			// Use the discovered schema from Parquet/Delta/Iceberg
-			for (auto &col : discovered_columns) {
-				info.columns.AddColumn(std::move(col));
-			}
-		} else {
-			// Try to parse Spark schema for other tables
-			vector<HMSAPIColumnDefinition> spark_columns;
-			if (HMSUtils::ParseSparkSchema(table.parameters, spark_columns)) {
-				for (auto &col : spark_columns) {
-					// col.type is already a DuckDB LogicalType string (e.g. "INTEGER", "STRUCT(...)")
-					auto logical_type = TransformStringToLogicalType(col.type, context);
-					info.columns.AddColumn(ColumnDefinition(col.name, logical_type));
-				}
-			} else {
-				// Fallback to standard HMS columns
-				for (auto &col : table.columns) {
-					auto logical_type = HMSUtils::TypeToLogicalType(context, col.type);
-					info.columns.AddColumn(ColumnDefinition(col.name, logical_type));
-				}
-			}
-		}
+		ResolveTableColumns(context, catalog, schema, table, info.columns);
 
 		// Add HMS metadata as tags for inter-extension communication (e.g., with OpenLineage)
 		// This allows other extensions to access HMS metadata without code dependencies
@@ -156,33 +187,8 @@ unique_ptr<HMSTableInfo> HMSTableSet::GetTableInfo(ClientContext &context, HMSSc
 	result->table_data = make_uniq<HMSAPITable>(std::move(t));
 
 	// Resolve schema using the same logic as LoadEntries.
-	// Try to discover dynamic schema for Parquet/Delta/Iceberg tables
-	vector<ColumnDefinition> discovered_columns;
-	if (HMSTableEntry::DiscoverDynamicSchema(context, catalog, schema, *result->table_data, discovered_columns)) {
-		// Use the discovered schema from Parquet/Delta/Iceberg
-		result->create_info->columns = CreateTableInfo().columns; // clear and re-fill
-		for (auto &col : discovered_columns) {
-			result->create_info->columns.AddColumn(std::move(col));
-		}
-	} else {
-		// Try to parse Spark schema for other tables
-		vector<HMSAPIColumnDefinition> spark_columns;
-		if (HMSUtils::ParseSparkSchema(result->table_data->parameters, spark_columns)) {
-			result->create_info->columns = CreateTableInfo().columns; // clear and re-fill
-			for (auto &col : spark_columns) {
-				// col.type is already a DuckDB LogicalType string (e.g. "INTEGER", "STRUCT(...)")
-				auto logical_type = TransformStringToLogicalType(col.type, context);
-				result->create_info->columns.AddColumn(ColumnDefinition(col.name, logical_type));
-			}
-		} else {
-			// Fallback to standard HMS columns
-			result->create_info->columns = CreateTableInfo().columns; // clear and re-fill
-			for (auto &c : result->table_data->columns) {
-				auto logical_type = HMSUtils::TypeToLogicalType(context, c.type);
-				result->create_info->columns.AddColumn(ColumnDefinition(c.name, logical_type));
-			}
-		}
-	}
+	result->create_info->columns = CreateTableInfo().columns; // start empty
+	ResolveTableColumns(context, catalog, schema, *result->table_data, result->create_info->columns);
 
 	// Add HMS metadata as tags for inter-extension communication (e.g., with OpenLineage)
 	// This allows other extensions to access HMS metadata without code dependencies

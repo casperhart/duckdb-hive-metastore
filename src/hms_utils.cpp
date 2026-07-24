@@ -59,6 +59,31 @@ struct YyjsonDocDeleter {
 // - User-defined types (UDT) with fallback to VARCHAR
 //
 // The yyjson library is used for high-performance, zero-copy JSON parsing.
+// Parse a "decimal(precision,scale)" spec (as stored by Hive/Spark) into its two
+// components. Returns false if the string isn't a well-formed decimal spec.
+static bool ParseDecimalSpec(const string &type_text, uint8_t &precision, uint8_t &scale) {
+	size_t open = type_text.find('(');
+	size_t close = type_text.find(')', open == string::npos ? 0 : open);
+	if (open == string::npos || close == string::npos || close <= open + 1) {
+		return false;
+	}
+	size_t sep = type_text.find(',', open);
+	if (sep == string::npos || sep >= close) {
+		return false;
+	}
+	auto prec_str = type_text.substr(open + 1, sep - open - 1);
+	auto scale_str = type_text.substr(sep + 1, close - sep - 1);
+	StringUtil::Trim(prec_str);
+	StringUtil::Trim(scale_str);
+	try {
+		precision = Cast::Operation<string_t, uint8_t>(prec_str);
+		scale = Cast::Operation<string_t, uint8_t>(scale_str);
+		return true;
+	} catch (const std::exception &) {
+		return false;
+	}
+}
+
 static LogicalType ParseSparkDataType(yyjson_val *type_val) {
 	if (!type_val) {
 		return LogicalType::VARCHAR; // Fallback for null values
@@ -90,6 +115,12 @@ static LogicalType ParseSparkDataType(yyjson_val *type_val) {
 			return LogicalType::TINYINT;
 		} else if (type_str == hms::hive_type::SMALLINT_ALT || type_str == hms::hive_type::SMALLINT) {
 			return LogicalType::SMALLINT;
+		} else if (StringUtil::StartsWith(type_str, hms::hive_type::DECIMAL_PREFIX)) {
+			// Spark serialises decimals in string form, e.g. "decimal(10,2)".
+			uint8_t precision, scale;
+			if (ParseDecimalSpec(type_str, precision, scale)) {
+				return LogicalType::DECIMAL(precision, scale);
+			}
 		}
 		// Fallback for unknown simple types
 		return LogicalType::VARCHAR;

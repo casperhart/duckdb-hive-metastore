@@ -194,6 +194,28 @@ vector<Apache::Hadoop::Hive::Table> HMSClient::GetTableObjects(const string &db_
 	return std::move(result.tables);
 }
 
+vector<Apache::Hadoop::Hive::Partition> HMSClient::GetPartitions(const string &db_name, const string &table_name) {
+	if (!connected)
+		Open();
+	vector<Apache::Hadoop::Hive::Partition> partitions;
+	try {
+		// max_parts = -1 asks the metastore for every partition. For very large
+		// tables this could be chunked via get_partition_names +
+		// get_partitions_by_names; kept as a single call for now.
+		client->get_partitions(partitions, db_name, table_name, -1);
+	} catch (apache::thrift::transport::TTransportException &tx) {
+		connected = false;
+		throw HMSTransportError(tx.what());
+	} catch (Apache::Hadoop::Hive::NoSuchObjectException &e) {
+		throw IOException("Table '%s.%s' not found while listing partitions: %s", db_name, table_name, e.message);
+	} catch (Apache::Hadoop::Hive::MetaException &e) {
+		throw IOException("Failed to get partitions for '%s.%s': %s", db_name, table_name, e.message);
+	} catch (apache::thrift::TException &tx) {
+		throw IOException("Failed to get partitions for '%s.%s': %s", db_name, table_name, tx.what());
+	}
+	return partitions;
+}
+
 void HMSClient::CreateTable(const Apache::Hadoop::Hive::Table &table) {
 	if (!connected)
 		Open();

@@ -162,7 +162,9 @@ bool PathUtils::HasFileExtension(const string &path) {
 }
 
 string PathUtils::BuildGlobPattern(const string &path, const FormatDetectionResult &format, bool is_partitioned) {
-	// Don't add glob if path already has a file extension
+	// Don't add glob if path already has a file extension. A trailing slash means
+	// the path is a directory, so HasFileExtension correctly returns false there
+	// (the last '.' precedes the final '/').
 	if (HasFileExtension(path)) {
 		return path;
 	}

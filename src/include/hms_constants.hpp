@@ -42,7 +42,8 @@ constexpr const char *TIMESTAMP = "timestamp";
 constexpr const char *VOID = "void";
 constexpr const char *BYTE = "byte";
 constexpr const char *TINYINT_ALT = "tinyint";
-constexpr const char *SMALLINT_ALT = "smallint";
+// Spark's canonical JSON type name for a 16-bit int is "short" (not "smallint").
+constexpr const char *SMALLINT_ALT = "short";
 constexpr const char *ARRAY_PREFIX = "array<";
 constexpr const char *MAP_PREFIX = "map<";
 constexpr const char *STRUCT_PREFIX = "struct<";

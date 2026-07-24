@@ -30,6 +30,20 @@ struct HMSAPITable {
 	vector<HMSAPIColumnDefinition> partition_keys;
 };
 
+// One partition of a partitioned table, as recorded in HMS. `values` are the
+// partition-key values positional to HMSAPITable::partition_keys (declared
+// order), and `location` is that partition's own storage path — which may be
+// anywhere, independent of the table root.
+struct HMSAPIPartition {
+	vector<string> values;
+	string location;
+	string input_format;
+	string output_format;
+	string serialization_lib;
+	map<string, string> serde_parameters;
+	map<string, string> parameters;
+};
+
 class HMSAPI {
 public:
 	// The operations below run against a caller-owned, already-open client,
@@ -38,6 +52,11 @@ public:
 	// metastore per call.
 	static vector<HMSAPISchema> GetSchemas(HMSClient &client);
 	static vector<HMSAPITable> GetTablesInSchema(HMSClient &client, const string &schema);
+
+	// List the partitions of a partitioned table, in HMS's declared partition-key
+	// order. Used to drive partition-aware scans where the metastore (not the
+	// on-disk path layout) determines each partition's values and location.
+	static vector<HMSAPIPartition> GetPartitions(HMSClient &client, const string &db_name, const string &table_name);
 
 	// Create a table in HMS
 	static void CreateTable(HMSClient &client, const Apache::Hadoop::Hive::Table &table);

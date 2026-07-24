@@ -1,6 +1,7 @@
 #include "storage/hms_catalog.hpp"
 #include "storage/hms_schema_entry.hpp"
 #include "storage/hms_table_entry.hpp"
+#include "storage/hms_multi_file_reader.hpp"
 #include "hms_api.hpp"
 #include "hms_constants.hpp"
 #include "hms_format_detector.hpp"
@@ -207,34 +208,66 @@ TableFunction HMSTableEntry::GetScanFunction(ClientContext &context, unique_ptr<
 		context.db->config.SetOption("s3_url_style", url_style_val);
 	}
 
-	// Build glob pattern for directory-based scans
-	scan_path = hms::PathUtils::BuildGlobPattern(scan_path, format_result, format_result.is_partitioned);
+	bool partitioned_parquet = format_result.IsParquet() && !table_data->partition_keys.empty();
 
-	// Set the path as input to table function
-	vector<Value> inputs = {Value(scan_path)};
-
-	if (table_data->storage_location.find("file://") != 0) {
-		// S3 credentials handling would go here.
-	}
+	vector<Value> inputs;
 	named_parameter_map_t param_map;
 
-	// For Iceberg tables, add allow_moved_paths for better path handling
-	if (format_result.IsIceberg()) {
-		param_map["allow_moved_paths"] = Value::BOOLEAN(true);
-	}
+	if (partitioned_parquet) {
+		// HMS is the source of truth for partitions. Enumerate them and scan each
+		// partition's own recorded location (which may live outside the table
+		// root, e.g. a relocated partition), then let HMSMultiFileReader supply
+		// the partition-column values from HMS instead of parsing key=value path
+		// segments. This also fixes the alphabetical partition-column ordering
+		// DuckDB's built-in hive_partitioning would otherwise impose.
+		auto &hms_catalog = catalog.Cast<HMSCatalog>();
+		auto partitions = hms_catalog.GetConnection().Execute(
+		    [&](HMSClient &client) { return HMSAPI::GetPartitions(client, schema.name, name); });
 
-	// For partitioned Parquet tables, enable hive_partitioning to read partition columns from directory names
-	if (!format_result.IsDelta() && !format_result.IsIceberg() && !table_data->partition_keys.empty() &&
-	    format_result.IsParquet()) {
-		param_map["hive_partitioning"] = Value::BOOLEAN(true);
-
-		// Specify partition column types to match HMS metadata and avoid BIGINT inference
-		child_list_t<Value> hive_types_children;
-		for (const auto &pk : table_data->partition_keys) {
-			auto duckdb_type = HMSUtils::TypeToLogicalType(context, pk.type);
-			hive_types_children.push_back(make_pair(pk.name, Value(duckdb_type.ToString())));
+		auto scan_info = make_shared_ptr<HMSPartitionScanInfo>();
+		for (auto &pk : table_data->partition_keys) {
+			scan_info->partition_key_names.push_back(pk.name);
+			scan_info->partition_key_types.push_back(HMSUtils::TypeToLogicalType(context, pk.type));
 		}
-		param_map["hive_types"] = Value::STRUCT(std::move(hive_types_children));
+		scan_info->partitions = std::move(partitions);
+
+		vector<Value> partition_globs;
+		partition_globs.reserve(scan_info->partitions.size());
+		for (auto &partition : scan_info->partitions) {
+			auto part_path = hms::PathUtils::NormalizeScanPath(partition.location, *table_data, format_result);
+			string part_dir = part_path.scan_path;
+			// Keep a trailing slash: it marks the location as a directory (so a
+			// dotted partition value like amount=10.99 is not mistaken for a file),
+			// and it makes the reader's prefix match exact — region=North/ won't
+			// spuriously match a sibling region=Northland/.
+			if (!StringUtil::EndsWith(part_dir, "/")) {
+				part_dir += "/";
+			}
+			// Store the normalized location back so HMSMultiFileReader can match
+			// scanned file paths (also normalized, e.g. s3a:// -> s3://) to their
+			// partition by prefix.
+			partition.location = part_dir;
+			// Glob the partition's own directory non-recursively (is_partitioned =
+			// false): a partition location is a leaf that holds its data files
+			// directly, so we must not descend into subdirectories — that would
+			// read staging dirs (e.g. Spark's _temporary) or, if partition
+			// locations nest, another partition's files. Format-aware via
+			// BuildGlobPattern, though this branch is Parquet-only.
+			partition_globs.push_back(Value(hms::PathUtils::BuildGlobPattern(part_dir, format_result, false)));
+		}
+		inputs.push_back(Value::LIST(LogicalType::VARCHAR, std::move(partition_globs)));
+
+		scan_function.get_multi_file_reader = HMSMultiFileReader::CreateInstance;
+		scan_function.function_info = make_shared_ptr<HMSMultiFileReaderFunctionInfo>(std::move(scan_info));
+	} else {
+		// Build glob pattern for directory-based scans
+		scan_path = hms::PathUtils::BuildGlobPattern(scan_path, format_result, format_result.is_partitioned);
+		inputs.push_back(Value(scan_path));
+
+		// For Iceberg tables, add allow_moved_paths for better path handling
+		if (format_result.IsIceberg()) {
+			param_map["allow_moved_paths"] = Value::BOOLEAN(true);
+		}
 	}
 
 	// For CSV/Text tables, we must provide the schema to avoid type mismatch crashes

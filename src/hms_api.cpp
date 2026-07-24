@@ -106,6 +106,25 @@ vector<HMSAPITable> HMSAPI::GetTablesInSchema(HMSClient &client, const string &s
 	return result;
 }
 
+vector<HMSAPIPartition> HMSAPI::GetPartitions(HMSClient &client, const string &db_name, const string &table_name) {
+	auto hive_partitions = client.GetPartitions(db_name, table_name);
+
+	vector<HMSAPIPartition> result;
+	result.reserve(hive_partitions.size());
+	for (const auto &hp : hive_partitions) {
+		HMSAPIPartition p;
+		p.values.assign(hp.values.begin(), hp.values.end());
+		p.location = hp.sd.location;
+		p.input_format = hp.sd.inputFormat;
+		p.output_format = hp.sd.outputFormat;
+		p.serialization_lib = hp.sd.serdeInfo.serializationLib;
+		p.serde_parameters = hp.sd.serdeInfo.parameters;
+		p.parameters = hp.parameters;
+		result.push_back(std::move(p));
+	}
+	return result;
+}
+
 void HMSAPI::CreateTable(HMSClient &client, const Apache::Hadoop::Hive::Table &table) {
 	client.CreateTable(table);
 }

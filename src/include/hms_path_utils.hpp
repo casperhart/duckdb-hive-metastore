@@ -42,6 +42,8 @@ public:
 
 	// Build a glob pattern for directory-based scans
 	// e.g., /path/to/table -> /path/to/table/**/*.parquet
+	// A trailing slash on `path` marks it as a directory (so a dotted final
+	// segment such as a `amount=10.99` partition dir is not mistaken for a file).
 	static string BuildGlobPattern(const string &path, const FormatDetectionResult &format, bool is_partitioned);
 
 	// Check if a path looks like a file (has extension)

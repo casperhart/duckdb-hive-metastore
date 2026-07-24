@@ -71,6 +71,11 @@ public:
 	Apache::Hadoop::Hive::Database GetDatabase(const string &db_name);
 	Apache::Hadoop::Hive::Table GetTable(const string &db_name, const string &table_name);
 	vector<Apache::Hadoop::Hive::Table> GetTableObjects(const string &db_name, const vector<string> &table_names);
+	// List all partitions of a table. Each Partition carries its own values
+	// (positional to the table's partition keys, in declared order) and its own
+	// storage descriptor (location, format) — the metastore, not the on-disk
+	// path layout, is the source of truth for where partition data lives.
+	vector<Apache::Hadoop::Hive::Partition> GetPartitions(const string &db_name, const string &table_name);
 	// Create a table in the metastore using a Thrift Table object
 	void CreateTable(const Apache::Hadoop::Hive::Table &table);
 	// Drop a table from the metastore. delete_data=false preserves the underlying
