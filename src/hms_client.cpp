@@ -143,8 +143,7 @@ Apache::Hadoop::Hive::Table HMSClient::GetTable(const string &db_name, const str
 		// Not a failure: the table simply doesn't exist. Surface a distinct type so
 		// the catalog layer can translate it into a null lookup (DuckDB then emits
 		// its standard "table does not exist") rather than an IOException.
-		throw HMSTableNotFoundError(
-		    StringUtil::Format("Table '%s.%s' not found: %s", db_name, table_name, e.message));
+		throw HMSTableNotFoundError(StringUtil::Format("Table '%s.%s' not found: %s", db_name, table_name, e.message));
 	} catch (apache::thrift::transport::TTransportException &tx) {
 		connected = false;
 		throw HMSTransportError(tx.what());

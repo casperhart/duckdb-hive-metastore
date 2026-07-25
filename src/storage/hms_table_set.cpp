@@ -141,8 +141,8 @@ void HMSTableSet::Scan(ClientContext &context, const std::function<void(CatalogE
 
 	// Authoritative, always-fresh table list. Cheap (names only). We do not rely on
 	// the resident map being complete because LRU eviction may have removed entries.
-	auto names = hms_catalog.GetConnection().Execute(
-	    [&](HMSClient &client) { return client.GetAllTables(schema.name); });
+	auto names =
+	    hms_catalog.GetConnection().Execute([&](HMSClient &client) { return client.GetAllTables(schema.name); });
 
 	// Process in chunks so peak memory (fetched table objects + freshly-built
 	// entries) is bounded even for a very large schema; each chunk's misses are

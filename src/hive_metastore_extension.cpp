@@ -136,11 +136,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	});
 
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.AddExtensionOption(
-	    "hms_table_cache_size",
-	    "Maximum number of table catalog entries cached per schema before least-recently-used "
-	    "eviction (0 = unbounded).",
-	    LogicalType::UBIGINT, Value::UBIGINT(HMS_DEFAULT_TABLE_CACHE_SIZE));
+	config.AddExtensionOption("hms_table_cache_size",
+	                          "Maximum number of table catalog entries cached per schema before least-recently-used "
+	                          "eviction (0 = unbounded).",
+	                          LogicalType::UBIGINT, Value::UBIGINT(HMS_DEFAULT_TABLE_CACHE_SIZE));
 	StorageExtension::Register(config, "hive_metastore", make_uniq<HiveMetastoreStorageExtension>());
 	StorageExtension::Register(config, "hms_catalog", make_uniq<HiveMetastoreStorageExtension>());
 
